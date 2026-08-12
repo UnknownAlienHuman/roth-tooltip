@@ -17,3 +17,7 @@ Open settings with `/tinytooltip`, `/tt`, or `/tip`. Bare `/rtt` prints diagnost
 ## Current development status
 
 The recorded incident fix changes the unit-tooltip refresh path to prioritise safe `SetUnit()` / `SetHyperlink()` reopening and blocks the unit fallback to `RebuildFromTooltipInfo()` when safe refresh fails. Remaining work is live in-game verification of reload, modifier changes, inspect completion, and applying/reapplying profiles without the cited errors. See [todo.md](todo.md).
+
+## License
+
+Licensed under the [MIT License](LICENSE). Bundled third-party components remain under their own notices.
