@@ -1,11 +1,11 @@
 # Code index
 
-| Area | Files | Responsibility |
+| Area | Files | Exact anchors |
 | --- | --- | --- |
-| Bootstrap | `Core.lua`, `General.lua` | initialization, SavedVariables merge/migration, general tooltip behaviour |
-| Engine | `Engine/` | module event manager, safety/policy, diagnosis, debug UI, style |
-| Tooltip features | `Anchor.lua`, `Target.lua`, `Unit.lua`, `Item.lua`, `Spell.lua`, `Quest.lua`, `Mount.lua`, `Model.lua`, `LinkID.lua`, `ExpansionInfo.lua`, `SkinFrames.lua` | specialised tooltip extensions |
-| Configuration | `Config.lua`, `Options.lua` | defaults and Settings UI/slash commands |
-| Compatibility and localisation | `Compat_MoneyFrame.lua`, `locales/`, `libs/` | compatibility path, translations, bundled libraries |
+| Context/bootstrap | [`Core.lua`](Core.lua), [`General.lua`](General.lua) | `InitTooltipDataProcessor`, `GetPrimaryTooltipContext`, `RefreshTooltipSafe`, `InitOnce`, `MergeVariable` |
+| Engine | [`Engine/ModuleManager.lua`](Engine/ModuleManager.lua), [`Engine/Safe.lua`](Engine/Safe.lua), [`Engine/Policy.lua`](Engine/Policy.lua), [`Engine/Style.lua`](Engine/Style.lua), [`Engine/Doctor.lua`](Engine/Doctor.lua), [`Engine/Debug.lua`](Engine/Debug.lua) | `RegisterModule`, `AttachTrigger`, `AttachEvent`, `ApplySaved`, `tooltip.style.*`, `InitDoctor` |
+| Feature modules | [`Anchor.lua`](Anchor.lua), [`Target.lua`](Target.lua), [`Unit.lua`](Unit.lua), [`Model.lua`](Model.lua), [`Item.lua`](Item.lua), [`Spell.lua`](Spell.lua), [`Quest.lua`](Quest.lua), [`LinkID.lua`](LinkID.lua), [`Mount.lua`](Mount.lua), [`ExpansionInfo.lua`](ExpansionInfo.lua), [`SkinFrames.lua`](SkinFrames.lua) | each `M:Init`/`M:Enable` and `MM:RegisterModule` |
+| Configuration | [`Config.lua`](Config.lua), [`Options.lua`](Options.lua) | `addon.db`, `TryInitializeOptions`, `SlashCmdList.RothTooltip`, proxy setting writers |
+| Compatibility/locales | [`Compat_MoneyFrame.lua`](Compat_MoneyFrame.lua), [`locales/`](locales/), [`libs/Template.xml`](libs/Template.xml) | narrow money wrapper, locale and import/export template |
 
-Primary anchors: `RefreshTooltipSafe`, `TryInitializeOptions`, `SlashCmdList.RothTooltip`, and the ModuleManager event attachment path.
+No feature module should bypass `ModuleManager` or write tooltip styles directly without a named trigger.

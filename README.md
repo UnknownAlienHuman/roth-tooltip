@@ -12,7 +12,7 @@ Copy `RothTooltip` to `World of Warcraft/_retail_/Interface/AddOns/`, enable it,
 
 ## Use
 
-Open settings with `/tinytooltip`, `/tt`, or `/tip`. Bare `/rtt` prints diagnostic help; `/rtt errors`, `/rtt export`, and `/rtt modules` open the doctor UI with the selected data. The settings registration code exposes categories for player, NPC, statusbar, spell, font, module, and data options.
+Open settings with `/tinytooltip`, `/tt`, or `/tip`. The checked-in settings slash handler supports `reset`, `npc`, `npc-elements`, `player`, `player-elements`, `spell`, `statusbar`, `font`, `modules`, and `data`. The diagnostic handler in [`Engine/Debug.lua`](Engine/Debug.lua) registers `/rtt` and supports `help`, `errors`, `export`, `modules`, `enable <name>`, `disable <name>`, `toggle <name>`, and `clear`.
 
 ## Current development status
 
