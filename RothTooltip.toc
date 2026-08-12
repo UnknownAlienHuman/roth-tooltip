@@ -1,0 +1,34 @@
+## Interface: 120001, 120005
+## Title: Roth Tooltip
+## Notes: Roth Tooltip
+## Author: Neomorph
+## Version: 12.0.20
+## SavedVariables: RothTooltipDB
+## SavedVariablesPerCharacter: RothTooltipCharacterDB
+
+libs\lib.xml
+Engine\Safe.lua
+Engine\Policy.lua
+Engine\ModuleManager.lua
+Engine\Doctor.lua
+Engine\Debug.lua
+Engine\Style.lua
+Core.lua
+Compat_MoneyFrame.lua
+Config.lua
+General.lua
+Anchor.lua
+Target.lua
+Unit.lua
+Model.lua
+Item.lua
+Spell.lua
+Quest.lua
+LinkID.lua
+Mount.lua
+ExpansionInfo.lua
+SkinFrames.lua
+
+libs\Template.xml
+locales\locales.xml
+Options.lua
