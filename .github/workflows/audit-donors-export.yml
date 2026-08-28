@@ -25,17 +25,10 @@ jobs:
             Interface/AddOns/Blizzard_Settings_Shared
           cd ..
 
-      - name: Fetch engineering knowledge base
-        run: |
-          git clone --depth 1 \
-            https://github.com/UnknownAlienHuman/wow-addon-engineering-kb.git \
-            wow-addon-engineering-kb
-
       - name: Package donor material
         run: |
           zip -qr roth-tooltip-audit-donors.zip \
             wow-ui-source \
-            wow-addon-engineering-kb \
             -x '*/.git/*' \
             -x 'roth-tooltip-audit-donors.zip'
 
