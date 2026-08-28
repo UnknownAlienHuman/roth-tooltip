@@ -88,21 +88,25 @@ end
 local function CanSetModelUnit(frame, unit)
     if not addon:IsObjectAccessible(frame) or not ModelPathAllowed(unit) then return false end
 
-    local canSet = addon:SafeGet(frame, "CanSetUnit")
-    if type(canSet) == "function" then
-        local ok, result = pcall(canSet, frame, unit)
-        if not ok or not CanAccess(result) or result ~= true then return false end
+    local canSetUnit = addon:SafeGet(frame, "CanSetUnit")
+    if type(canSetUnit) == "function" then
+        -- Generated FrameAPICharacterModelBase docs declare no return value for
+        -- CanSetUnit(). Treat only an error, inaccessible result, or explicit
+        -- false as denial. SetUnit() carries the authoritative success bool.
+        local ok, result = pcall(canSetUnit, frame, unit)
+        if not ok or not CanAccess(result) or result == false then return false end
     end
     return true
 end
 
 local function SetModelUnit(frame, unit)
     if not CanSetModelUnit(frame, unit) then return false end
+
     local setUnit = addon:SafeGet(frame, "SetUnit")
     if type(setUnit) ~= "function" then return false end
 
-    local ok, result = pcall(setUnit, frame, unit)
-    if not ok or not CanAccess(result) or result == false then return false end
+    local ok, success = pcall(setUnit, frame, unit)
+    if not ok or not CanAccess(success) or success ~= true then return false end
     return true
 end
 
