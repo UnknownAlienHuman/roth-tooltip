@@ -1,63 +1,104 @@
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 
-local GetItemInfo = C_Item.GetItemInfo
+local GetItemInfo = C_Item and C_Item.GetItemInfo
 
-local function ResolveExpansionItemInfo(tooltip, context)
-    context = context or addon:GetPrimaryTooltipContext(tooltip)
-    local hyperlink = context and context.hyperlink
-    if (not addon:IsSecret(hyperlink) and type(hyperlink) == "string" and hyperlink ~= "") then
-        return context, hyperlink
-    end
-
-    local itemID = context and context.itemID
-    if (not addon:IsSecret(itemID) and type(itemID) == "number") then
-        return context, itemID
-    end
-
-    return context, nil
+local function CanAccess(value)
+    return not addon.CanAccessValue or addon:CanAccessValue(value)
 end
 
--- Добавляет строку с названием эпохи предмета в tooltip.
+local function CallGetItemInfo(itemInfo)
+    if type(GetItemInfo) ~= "function" then return nil end
+    if addon.CanAccessAllValues and not addon:CanAccessAllValues(itemInfo) then return nil end
+
+    local ok, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, expansionID = pcall(GetItemInfo, itemInfo)
+    if not ok or not CanAccess(expansionID) or type(expansionID) ~= "number" then return nil end
+    return expansionID
+end
+
+local function EscapePattern(text)
+    if type(text) ~= "string" then return "" end
+    return (text:gsub("(%W)", "%%%1"))
+end
+
+local function ResolveExpansionItemInfo(tooltip, explicitLink, suppliedContext)
+    local context = suppliedContext
+    if not CanAccess(context) or type(context) ~= "table" then
+        context = addon:GetPrimaryTooltipContext(tooltip)
+    end
+
+    if type(context) == "table" then
+        local hyperlink = context.hyperlink
+        if CanAccess(hyperlink) and type(hyperlink) == "string" and hyperlink ~= "" then
+            return hyperlink
+        end
+
+        local itemID = context.itemID
+        if CanAccess(itemID) and type(itemID) == "number" then return itemID end
+    end
+
+    if CanAccess(explicitLink) and type(explicitLink) == "string" and explicitLink ~= "" then
+        return explicitLink
+    end
+    return nil
+end
+
 local function AddExpansionInfo(tooltip, link, context)
-    if (not addon.db or not addon.db.item or not addon.db.item.showExpansionInfo) then return end
-    if (not tooltip or (tooltip.IsForbidden and tooltip:IsForbidden())) then return end
+    local itemConfig = addon.db and addon.db.item
+    if type(itemConfig) ~= "table" or itemConfig.showExpansionInfo ~= true then return end
+    if not addon:IsTooltipSafe(tooltip) then return end
 
-    local itemInfo
-    context, itemInfo = ResolveExpansionItemInfo(tooltip, context)
-    if (not itemInfo) then return end
+    local itemInfo = ResolveExpansionItemInfo(tooltip, link, context)
+    if itemInfo == nil then return end
 
-    local _, _, _, _, _, _, _, _, _, _, _, _, _, _, expID = GetItemInfo(itemInfo)
-    if (not expID or addon:IsSecret(expID) or type(expID) ~= "number" or expID <= 0) then return end
+    local expansionID = CallGetItemInfo(itemInfo)
+    if type(expansionID) ~= "number" or expansionID <= 0 then return end
 
-    local expName = _G["EXPANSION_NAME" .. expID]
-    if (not expName) then return end
+    local expansionName = _G["EXPANSION_NAME" .. expansionID]
+    if type(expansionName) ~= "string" or expansionName == "" then return end
+    if addon:FindLine(tooltip, EscapePattern(expansionName)) then return end
 
-    -- Избегаем дублирования
-    if (addon:FindLine(tooltip, expName)) then return end
-
-    tooltip:AddLine(format("|cffffdd22%s:|r |cff64cd3c%s|r",
-        (addon.L and addon.L["tooltip.expansion"]) or "Expansion", expName), 0, 1, 0.8)
+    local label = addon.L and addon.L["tooltip.expansion"] or "Expansion"
+    addon:SafeMethod(
+        tooltip,
+        "AddLine",
+        string.format("|cffffdd22%s:|r |cff64cd3c%s|r", label, expansionName),
+        0,
+        1,
+        0.8
+    )
 end
 
--- Module wrapper
+local function OnItemInfoReceived(_, itemID, success)
+    if not CanAccess(itemID) or type(itemID) ~= "number" then return end
+    if not CanAccess(success) or success ~= true then return end
+
+    addon:RefreshManagedTooltipsMatching(function(_, context)
+        return type(context) == "table" and context.itemID == itemID
+    end, "GET_ITEM_INFO_RECEIVED")
+end
+
 local M = {}
 
 function M:Init()
     self.cbItem = function(_, tooltip, link, context)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("ExpansionInfo")) then return end
-        local ok, err = pcall(AddExpansionInfo, tooltip, link, context)
-        if (not ok and addon.DoctorLog) then
-            addon:DoctorLog("lua", "ExpansionInfo:tooltip:item", tostring(err), nil)
-        end
+        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("ExpansionInfo") then return end
+        AddExpansionInfo(tooltip, link, context)
     end
+    self.cbItemInfo = OnItemInfoReceived
 end
 
 function M:Enable()
-    if (addon.MM and addon.MM.AttachTrigger) then
+    if addon.MM and addon.MM.AttachTrigger then
         addon.MM:AttachTrigger("ExpansionInfo", "tooltip:item", self.cbItem, "tooltip:item")
     else
         LibEvent:attachTrigger("tooltip:item", self.cbItem)
+    end
+
+    if addon.MM and addon.MM.AttachEvent then
+        addon.MM:AttachEvent("ExpansionInfo", "GET_ITEM_INFO_RECEIVED", self.cbItemInfo, "GET_ITEM_INFO_RECEIVED")
+    else
+        LibEvent:attachEvent("GET_ITEM_INFO_RECEIVED", self.cbItemInfo)
     end
 end
 
@@ -65,6 +106,6 @@ function M:Disable() end
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
 
-if (addon.MM and addon.MM.RegisterModule) then
+if addon.MM and addon.MM.RegisterModule then
     addon.MM:RegisterModule("ExpansionInfo", M)
 end
