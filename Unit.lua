@@ -5,94 +5,178 @@ local C_ChallengeMode = C_ChallengeMode
 local C_PlayerInfo = C_PlayerInfo
 local C_PaperDollInfo = C_PaperDollInfo
 
-local function AddStatLine(tip, label, value)
-    if (addon.IsSecret and addon:IsSecret(value)) then return end
-    if (value == nil) then return end
-    if (type(label) ~= "string") then return end
-    if (tip.IsForbidden and tip:IsForbidden()) then return end
-    local keyword = label .. ":"
-    if (addon:FindLine(tip, keyword)) then return end
-    tip:AddLine(format("%s: |cffffffff%s|r", label, value), 0, 1, 0.8)
+local MAX_INSPECT_CACHE = 64
+local INSPECT_CACHE_TTL = 300
+local INSPECT_REQUEST_THROTTLE = 2
+local RAID_CACHE_TTL = 300
+
+local function CanAccess(value)
+    return not addon.CanAccessValue or addon:CanAccessValue(value)
 end
 
+local function CanAccessAll(...)
+    return not addon.CanAccessAllValues or addon:CanAccessAllValues(...)
+end
 
+local function Call(fn, ...)
+    if not CanAccess(fn) or type(fn) ~= "function" then return nil end
+    if not CanAccessAll(...) then return nil end
+
+    local ok, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14 = pcall(fn, ...)
+    if not ok then return nil end
+
+    if not CanAccess(a1) then a1 = nil end
+    if not CanAccess(a2) then a2 = nil end
+    if not CanAccess(a3) then a3 = nil end
+    if not CanAccess(a4) then a4 = nil end
+    if not CanAccess(a5) then a5 = nil end
+    if not CanAccess(a6) then a6 = nil end
+    if not CanAccess(a7) then a7 = nil end
+    if not CanAccess(a8) then a8 = nil end
+    if not CanAccess(a9) then a9 = nil end
+    if not CanAccess(a10) then a10 = nil end
+    if not CanAccess(a11) then a11 = nil end
+    if not CanAccess(a12) then a12 = nil end
+    if not CanAccess(a13) then a13 = nil end
+    if not CanAccess(a14) then a14 = nil end
+
+    return a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14
+end
+
+local function ReadField(tbl, key)
+    if not CanAccess(tbl) or type(tbl) ~= "table" then return nil end
+    local ok, value = pcall(function() return tbl[key] end)
+    if not ok or not CanAccess(value) then return nil end
+    return value
+end
+
+local function ReadNumber(tbl, key)
+    local value = ReadField(tbl, key)
+    if type(value) == "number" then return value end
+    return nil
+end
+
+local function ReadString(tbl, key)
+    local value = ReadField(tbl, key)
+    if type(value) == "string" and value ~= "" then return value end
+    return nil
+end
+
+local function IsOrdinaryUnit(unit)
+    if not CanAccess(unit) or type(unit) ~= "string" or unit == "" then return false end
+    if addon.IsUnitIdentityRestricted and addon:IsUnitIdentityRestricted(unit) then return false end
+    return true
+end
+
+local function EscapePattern(text)
+    return (text:gsub("([^%w])", "%%%1"))
+end
+
+local function AddStatLine(tip, label, value)
+    if not addon:IsTooltipSafe(tip) then return end
+    if not CanAccess(label) or type(label) ~= "string" or label == "" then return end
+    if not CanAccess(value) or (type(value) ~= "string" and type(value) ~= "number") then return end
+
+    local keyword = EscapePattern(label) .. ":"
+    if addon:FindLine(tip, keyword) then return end
+
+    local text = string.format("%s: |cffffffff%s|r", label, tostring(value))
+    addon:SafeMethod(tip, "AddLine", text, 0, 1, 0.8)
+end
 
 local function GetBestMythicPlusKey(unit)
-    if (addon:IsSecret(unit) or not unit) then return end
-    if (not C_PlayerInfo) or (not C_PlayerInfo.GetPlayerMythicPlusRatingSummary) then return end
+    if not IsOrdinaryUnit(unit) then return nil end
+    if not C_PlayerInfo or type(C_PlayerInfo.GetPlayerMythicPlusRatingSummary) ~= "function" then return nil end
 
-    local summary = C_PlayerInfo.GetPlayerMythicPlusRatingSummary(unit)
-    if (addon:IsSecret(summary) or not summary) then return end
+    local summary = Call(C_PlayerInfo.GetPlayerMythicPlusRatingSummary, unit)
+    if type(summary) ~= "table" then return nil end
 
-    local runs = summary.runs
-    if (type(runs) ~= "table") then return end
+    local runs = ReadField(summary, "runs")
+    if type(runs) ~= "table" then return nil end
 
     local bestLevel, bestModeID, bestScore
-
     for _, run in ipairs(runs) do
-        if (type(run) == "table") then
-            local lvl = run.bestRunLevel
-            if (not addon:IsSecret(lvl) and lvl ~= nil and type(lvl) == "number") then
-                local score = run.bestRunScore or run.mapScore
-                if (addon:IsSecret(score)) then score = nil end
+        if CanAccess(run) and type(run) == "table" then
+            local level = ReadNumber(run, "bestRunLevel")
+            local score = ReadNumber(run, "bestRunScore")
+            if score == nil then score = ReadNumber(run, "mapScore") end
+            local modeID = ReadNumber(run, "challengeModeID")
 
-                if (not bestLevel) or (lvl > bestLevel) or (lvl == bestLevel and score and bestScore and score > bestScore) then
-                    bestLevel = lvl
-                    bestModeID = run.challengeModeID
+            if level ~= nil then
+                local replace = bestLevel == nil or level > bestLevel
+                if not replace and level == bestLevel and score ~= nil then
+                    replace = bestScore == nil or score > bestScore
+                end
+                if replace then
+                    bestLevel = level
+                    bestModeID = modeID
                     bestScore = score
                 end
             end
         end
     end
 
-    if (not bestLevel) then return end
+    if bestLevel == nil then return nil end
 
     local mapName
-    if (not addon:IsSecret(bestModeID) and bestModeID ~= nil and C_ChallengeMode and C_ChallengeMode.GetMapUIInfo) then
-        local name = C_ChallengeMode.GetMapUIInfo(bestModeID)
-        if (type(name) == "string") then
-            mapName = name
-        end
+    if type(bestModeID) == "number" and C_ChallengeMode and type(C_ChallengeMode.GetMapUIInfo) == "function" then
+        local name = Call(C_ChallengeMode.GetMapUIInfo, bestModeID)
+        if type(name) == "string" and name ~= "" then mapName = name end
     end
-
     return bestLevel, mapName
 end
 
-local raidProgressCache = nil
+local raidProgressCache
 local raidProgressCacheTime = 0
--- Возвращает таблицу всех сохранённых рейдовых прогрессов (лучший по сложности на каждый рейд).
+
+local function PreferRaidEntry(previous, difficultyID, encounterProgress)
+    if not previous then return true end
+    if type(difficultyID) == "number" and type(previous.difficultyID) == "number"
+        and difficultyID ~= previous.difficultyID then
+        return difficultyID > previous.difficultyID
+    end
+    return encounterProgress > previous.encounterProgress
+end
+
 local function GetAllSavedRaidProgress()
-    if (not GetNumSavedInstances) or (not GetSavedInstanceInfo) then return end
+    if type(GetNumSavedInstances) ~= "function" or type(GetSavedInstanceInfo) ~= "function" then return nil end
+
     local now = GetTime and GetTime() or 0
-    if raidProgressCache and (now - raidProgressCacheTime < 300) then
+    if raidProgressCache and now - raidProgressCacheTime < RAID_CACHE_TTL then
         return raidProgressCache
     end
 
-    local n = GetNumSavedInstances()
-    if (addon:IsSecret(n) or type(n) ~= "number") then return end
+    local count = Call(GetNumSavedInstances)
+    if type(count) ~= "number" or count < 1 then
+        raidProgressCache = {}
+        raidProgressCacheTime = now
+        return raidProgressCache
+    end
 
-    local raids = {}  -- raidName → best entry
-    for i = 1, n do
-        local name, _, _, difficultyId, locked, _, _, isRaid, _, difficultyName, numEncounters, encounterProgress = GetSavedInstanceInfo(i)
-        if (addon:IsSecret(name)) then name = nil end
-        if (name and isRaid and locked) then
-            if (not addon:IsSecret(numEncounters)) and (not addon:IsSecret(encounterProgress))
-                and type(numEncounters) == "number" and type(encounterProgress) == "number" then
-                local prev = raids[name]
-                if (not prev)
-                    or (type(difficultyId) == "number" and type(prev.difficultyId) == "number" and difficultyId > prev.difficultyId)
-                    or (encounterProgress > prev.encounterProgress) then
-                    raids[name] = {
-                        raidName = name,
-                        difficultyId = difficultyId,
-                        difficultyName = (not addon:IsSecret(difficultyName) and difficultyName) or nil,
-                        numEncounters = numEncounters,
-                        encounterProgress = encounterProgress,
-                    }
-                end
+    local byName = {}
+    for index = 1, count do
+        local name, _, _, difficultyID, locked, _, _, isRaid, _, difficultyName, numEncounters, encounterProgress = Call(GetSavedInstanceInfo, index)
+
+        if type(name) == "string" and name ~= "" and locked == true and isRaid == true
+            and type(numEncounters) == "number" and type(encounterProgress) == "number" then
+            local previous = byName[name]
+            if PreferRaidEntry(previous, difficultyID, encounterProgress) then
+                byName[name] = {
+                    raidName = name,
+                    difficultyID = type(difficultyID) == "number" and difficultyID or nil,
+                    difficultyName = type(difficultyName) == "string" and difficultyName or nil,
+                    numEncounters = numEncounters,
+                    encounterProgress = encounterProgress,
+                }
             end
         end
     end
+
+    local raids = {}
+    for _, entry in pairs(byName) do
+        raids[#raids + 1] = entry
+    end
+    table.sort(raids, function(a, b) return a.raidName < b.raidName end)
 
     raidProgressCache = raids
     raidProgressCacheTime = now
@@ -103,321 +187,394 @@ local function InvalidateRaidCache()
     raidProgressCache = nil
     raidProgressCacheTime = 0
 end
+
 local inspectCache = {}
-local pendingInspect = nil
-local pendingInspectUnit = nil
+local inspectCacheCount = 0
+local pendingInspectGUID
+local pendingInspectUnit
 local inspectLastRequest = 0
 
+local function PruneInspectCache(now)
+    local oldestGUID, oldestTime
+    inspectCacheCount = 0
+
+    for guid, entry in pairs(inspectCache) do
+        local entryTime = type(entry) == "table" and entry.time or 0
+        if type(entryTime) ~= "number" or now - entryTime > INSPECT_CACHE_TTL then
+            inspectCache[guid] = nil
+        else
+            inspectCacheCount = inspectCacheCount + 1
+            if oldestTime == nil or entryTime < oldestTime then
+                oldestGUID = guid
+                oldestTime = entryTime
+            end
+        end
+    end
+
+    if inspectCacheCount >= MAX_INSPECT_CACHE and oldestGUID then
+        inspectCache[oldestGUID] = nil
+        inspectCacheCount = inspectCacheCount - 1
+    end
+end
+
 local function GetSafeUnitGUID(unit)
-    if (addon:IsSecret(unit) or type(unit) ~= "string" or unit == "") then
-        return nil
-    end
-    local guid = UnitGUID(unit)
-    if (addon:IsSecret(guid) or type(guid) ~= "string" or guid == "") then
-        return nil
-    end
+    if not IsOrdinaryUnit(unit) then return nil end
+    local guid = Call(UnitGUID, unit)
+    if type(guid) ~= "string" or guid == "" then return nil end
     return guid
 end
 
 local function GetTooltipContextGUID(context)
-    local guid = context and context.guid
-    if (not addon:IsSecret(guid) and type(guid) == "string" and guid ~= "") then
-        return guid
+    if CanAccess(context) and type(context) == "table" then
+        local guid = context.guid
+        if CanAccess(guid) and type(guid) == "string" and guid ~= "" then
+            return guid
+        end
+        local unit = context.unitToken
+        if IsOrdinaryUnit(unit) then return GetSafeUnitGUID(unit) end
     end
-    return GetSafeUnitGUID(context and context.unitToken)
+    return nil
 end
 
 local function ResolveInspectUnit(guid)
-    if (type(guid) ~= "string" or guid == "") then
-        return nil
-    end
+    if type(guid) ~= "string" or guid == "" then return nil end
 
-    if (GetSafeUnitGUID(pendingInspectUnit) == guid) then
+    if IsOrdinaryUnit(pendingInspectUnit) and GetSafeUnitGUID(pendingInspectUnit) == guid then
         return pendingInspectUnit
     end
 
     local unit = addon:ResolveUnitToken(nil, guid)
-    if (GetSafeUnitGUID(unit) == guid) then
+    if IsOrdinaryUnit(unit) and GetSafeUnitGUID(unit) == guid then
         return unit
     end
-
     return nil
 end
 
 local function ShouldClearInspectTarget()
-    if (InspectFrame and InspectFrame.IsShown and InspectFrame:IsShown()) then
+    if addon:IsObjectAccessible(InspectFrame) and addon:SafeMethod(InspectFrame, "IsShown") == true then
         return false
     end
-    if (PlayerSpellsFrame and PlayerSpellsFrame.IsInspecting and PlayerSpellsFrame:IsInspecting()) then
+    if addon:IsObjectAccessible(PlayerSpellsFrame)
+        and addon:SafeMethod(PlayerSpellsFrame, "IsInspecting") == true then
         return false
     end
     return true
 end
 
-LibEvent:attachEvent("INSPECT_READY", function(self, guid)
-    if (addon:IsSecret(guid)) then guid = nil end
-    if (not guid or guid ~= pendingInspect) then return end
+local function ClearPendingInspect()
+    pendingInspectGUID = nil
+    pendingInspectUnit = nil
+
+    if type(ClearInspectPlayer) == "function" and ShouldClearInspectTarget() then
+        pcall(ClearInspectPlayer)
+    end
+end
+
+local function OnInspectReady(_, guid)
+    if not CanAccess(guid) or type(guid) ~= "string" or guid == "" then return end
+    if pendingInspectGUID == nil or guid ~= pendingInspectGUID then return end
 
     local unit = ResolveInspectUnit(guid)
-    if (unit) then
-        local ilvl
-        if (C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel) then
-            ilvl = C_PaperDollInfo.GetInspectItemLevel(unit)
+    if unit then
+        local itemLevel
+        if C_PaperDollInfo and type(C_PaperDollInfo.GetInspectItemLevel) == "function" then
+            itemLevel = Call(C_PaperDollInfo.GetInspectItemLevel, unit)
         end
 
         local specID
-        if (GetInspectSpecialization) then
-            specID = GetInspectSpecialization(unit)
+        if type(GetInspectSpecialization) == "function" then
+            specID = Call(GetInspectSpecialization, unit)
         end
 
-        if (addon:IsSecret(ilvl)) then ilvl = nil end
-        if (addon:IsSecret(specID)) then specID = nil end
-        if (ilvl == 0) then ilvl = nil end
+        if type(itemLevel) ~= "number" or itemLevel <= 0 then itemLevel = nil end
+        if type(specID) ~= "number" or specID <= 0 then specID = nil end
 
+        local now = GetTime and GetTime() or 0
+        PruneInspectCache(now)
         inspectCache[guid] = {
-            ilvl = ilvl,
+            ilvl = itemLevel,
             specID = specID,
-            time = GetTime and GetTime() or 0,
+            time = now,
         }
+        inspectCacheCount = inspectCacheCount + 1
     end
 
-    pendingInspect = nil
-    pendingInspectUnit = nil
+    ClearPendingInspect()
 
-    if (ClearInspectPlayer and ShouldClearInspectTarget()) then
-        ClearInspectPlayer()
-    end
-
-    if (addon.RefreshManagedTooltipsMatching) then
-        addon:RefreshManagedTooltipsMatching(function(tip, context)
+    if addon.RefreshManagedTooltipsMatching then
+        addon:RefreshManagedTooltipsMatching(function(_, context)
             return GetTooltipContextGUID(context) == guid
         end, "INSPECT_READY")
     end
-end)
+end
 
--- Adds stats that are safe to compute locally (no inspection or hidden data).
--- Midnight (12.0+) can return SecretValue for some APIs; we guard every output.
+local function RequestInspect(unit, guid, now)
+    if not IsOrdinaryUnit(unit) then return end
+    if type(guid) ~= "string" or guid == "" then return end
+    if InCombatLockdown() then return end
+    if type(CanInspect) ~= "function" or addon:SafeCallBoolean(CanInspect, unit) ~= true then return end
+    if type(NotifyInspect) ~= "function" then return end
+
+    local sameRequest = pendingInspectGUID == guid and pendingInspectUnit == unit
+    if sameRequest and now - inspectLastRequest <= INSPECT_REQUEST_THROTTLE then return end
+
+    pendingInspectGUID = guid
+    pendingInspectUnit = unit
+    inspectLastRequest = now
+    local ok = pcall(NotifyInspect, unit)
+    if not ok then
+        pendingInspectGUID = nil
+        pendingInspectUnit = nil
+    end
+end
+
+local function GetCachedInspect(guid, now)
+    if type(guid) ~= "string" or guid == "" then return nil end
+    local entry = inspectCache[guid]
+    if type(entry) ~= "table" then return nil end
+    if type(entry.time) ~= "number" or now - entry.time > INSPECT_CACHE_TTL then
+        inspectCache[guid] = nil
+        inspectCacheCount = math.max(0, inspectCacheCount - 1)
+        return nil
+    end
+    return entry
+end
+
 local function AddPlayerStats(tip, unit)
-    local playerCfg = addon.db and addon.db.unit and addon.db.unit.player
-    if (not playerCfg) then return end
+    local playerConfig = addon.db and addon.db.unit and addon.db.unit.player
+    if type(playerConfig) ~= "table" or not IsOrdinaryUnit(unit) then return end
+    if addon.AreUnitStatsRestricted and addon:AreUnitStatsRestricted() then return end
 
     local isSelf = false
-    local guid = nil
-    if (not addon:IsSecret(unit) and type(unit) == "string") then
-        local same = UnitIsUnit(unit, "player")
-        if (addon:IsSecret(same)) then same = false end
-        isSelf = same and true or false
-        guid = UnitGUID(unit)
-        if (addon:IsSecret(guid)) then guid = nil end
+    if not addon.CanCompareUnitTokens or addon:CanCompareUnitTokens(unit, "player") then
+        isSelf = addon:SafeCallBoolean(UnitIsUnit, unit, "player") == true
     end
 
-    local cache = guid and inspectCache[guid] or nil
+    local guid = GetSafeUnitGUID(unit)
     local now = GetTime and GetTime() or 0
-    if cache and (now - cache.time > 300) then cache = nil end
+    local cache = GetCachedInspect(guid, now)
 
-    if (playerCfg.showItemLevel) then
-        if (isSelf) then
-            local overall, equipped = GetAverageItemLevel()
-            if (not addon:IsSecret(equipped) and type(equipped) == "number") then
-                local label = (addon.L and addon.L["tooltip.itemLevel"]) or "Item Level"
-                AddStatLine(tip, label, format("%.1f", equipped))
-            end
+    if playerConfig.showItemLevel == true then
+        local itemLevel
+        if isSelf then
+            local _, equipped = Call(GetAverageItemLevel)
+            if type(equipped) == "number" and equipped > 0 then itemLevel = equipped end
+        elseif cache and type(cache.ilvl) == "number" then
+            itemLevel = cache.ilvl
         else
-            local ilvl
-            if cache and cache.ilvl then
-                ilvl = cache.ilvl
-            elseif C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel then
-                if CanInspect and CanInspect(unit) then
-                    if pendingInspect ~= guid or pendingInspectUnit ~= unit or (now - inspectLastRequest > 2) then
-                        pendingInspect = guid
-                        pendingInspectUnit = unit
-                        inspectLastRequest = now
-                        NotifyInspect(unit)
-                    end
-                end
-            end
-            
-            if ilvl and type(ilvl) == "number" and ilvl > 0 then
-                local label = (addon.L and addon.L["tooltip.itemLevel"]) or "Item Level"
-                AddStatLine(tip, label, format("%.1f", ilvl))
-            end
+            RequestInspect(unit, guid, now)
+        end
+
+        if type(itemLevel) == "number" then
+            local label = addon.L and addon.L["tooltip.itemLevel"] or "Item Level"
+            AddStatLine(tip, label, string.format("%.1f", itemLevel))
         end
     end
 
-    if (playerCfg.showPveScore) then
+    if playerConfig.showPveScore == true then
         local score
-        if (isSelf and C_ChallengeMode and C_ChallengeMode.GetOverallDungeonScore) then
-            score = C_ChallengeMode.GetOverallDungeonScore()
-        elseif (not isSelf and C_PlayerInfo and C_PlayerInfo.GetPlayerMythicPlusRatingSummary) then
-            local summary = C_PlayerInfo.GetPlayerMythicPlusRatingSummary(unit)
-            if (addon:IsSecret(summary)) then summary = nil end
-            if (type(summary) == "table") then
-                score = summary.currentSeasonScore
-            end
+        if isSelf and C_ChallengeMode and type(C_ChallengeMode.GetOverallDungeonScore) == "function" then
+            score = Call(C_ChallengeMode.GetOverallDungeonScore)
+        elseif not isSelf and C_PlayerInfo and type(C_PlayerInfo.GetPlayerMythicPlusRatingSummary) == "function" then
+            local summary = Call(C_PlayerInfo.GetPlayerMythicPlusRatingSummary, unit)
+            score = ReadNumber(summary, "currentSeasonScore")
         end
 
-        if (not addon:IsSecret(score) and score ~= nil and type(score) == "number") then
+        if type(score) == "number" then
             local colored = tostring(score)
-            if (C_ChallengeMode and C_ChallengeMode.GetDungeonScoreRarityColor) then
-                local color = C_ChallengeMode.GetDungeonScoreRarityColor(score)
-                if (color and color.r and color.g and color.b) then
-                    local hex = addon:GetHexColor(color)
-                    colored = ("|cff" .. hex .. "%d|r"):format(score)
+            if C_ChallengeMode and type(C_ChallengeMode.GetDungeonScoreRarityColor) == "function" then
+                local color = Call(C_ChallengeMode.GetDungeonScoreRarityColor, score)
+                local r = ReadNumber(color, "r")
+                local g = ReadNumber(color, "g")
+                local b = ReadNumber(color, "b")
+                if r and g and b then
+                    colored = string.format("|cff%s%d|r", addon:GetHexColor(r, g, b), score)
                 end
             end
-            local label = (addon.L and addon.L["tooltip.pveScore"]) or "PvE Score"
+            local label = addon.L and addon.L["tooltip.pveScore"] or "PvE Score"
             AddStatLine(tip, label, colored)
         end
     end
 
-    if (playerCfg.showBestKey) then
+    if playerConfig.showBestKey == true then
         local level, mapName = GetBestMythicPlusKey(unit)
-        if (level ~= nil and type(level) == "number") then
-            local label = (addon.L and addon.L["tooltip.bestKey"]) or "Best M+ Key"
-            local value = ("+%d"):format(level)
-            if (mapName) then
-                value = value .. " - " .. mapName
-            end
+        if type(level) == "number" then
+            local value = string.format("+%d", level)
+            if type(mapName) == "string" then value = value .. " - " .. mapName end
+            local label = addon.L and addon.L["tooltip.bestKey"] or "Best M+ Key"
             AddStatLine(tip, label, value)
         end
     end
 
-    if (playerCfg.showRaidProgress) then
-        if (isSelf) then
-            local raids = GetAllSavedRaidProgress()
-            if (raids) then
-                for _, raid in pairs(raids) do
-                    if (raid.numEncounters and raid.encounterProgress) then
-                        local value = ("%d/%d"):format(raid.encounterProgress, raid.numEncounters)
-                        if (raid.difficultyName) then
-                            value = value .. " " .. raid.difficultyName
-                        end
-                        AddStatLine(tip, raid.raidName, value)
-                    end
+    if playerConfig.showRaidProgress == true and isSelf then
+        local raids = GetAllSavedRaidProgress()
+        if type(raids) == "table" then
+            for _, raid in ipairs(raids) do
+                local value = string.format("%d/%d", raid.encounterProgress, raid.numEncounters)
+                if type(raid.difficultyName) == "string" then
+                    value = value .. " " .. raid.difficultyName
                 end
+                AddStatLine(tip, raid.raidName, value)
             end
         end
     end
 
-    -- Spec and Role
-    local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(unit)
-    if (addon:IsSecret(role)) then role = nil end
-    
+    local role = Call(UnitGroupRolesAssigned, unit)
+    if type(role) ~= "string" then role = nil end
+
     local specID
     if isSelf then
-        if GetSpecialization then
-            local specIndex = GetSpecialization()
-            if specIndex and GetSpecializationInfo then
-                specID = GetSpecializationInfo(specIndex)
-            end
+        local specIndex = Call(GetSpecialization)
+        if type(specIndex) == "number" and type(GetSpecializationInfo) == "function" then
+            specID = Call(GetSpecializationInfo, specIndex)
         end
-    else
-        if cache and cache.specID then
-            specID = cache.specID
-        end
+    elseif cache and type(cache.specID) == "number" then
+        specID = cache.specID
     end
-    
-    if (addon:IsSecret(specID)) then specID = nil end
-    
-    if specID and GetSpecializationInfoByID then
-        local id, name, description, icon, specRole = GetSpecializationInfoByID(specID)
-        if not addon:IsSecret(name) and name then
-            local label = (addon.L and addon.L["tooltip.spec"]) or "Spec"
-            AddStatLine(tip, label, name)
-            if not role or role == "NONE" then
-                role = specRole
+
+    if type(specID) == "number" and type(GetSpecializationInfoByID) == "function" then
+        local _, specName, _, _, specRole = Call(GetSpecializationInfoByID, specID)
+        if type(specName) == "string" and specName ~= "" then
+            local label = addon.L and addon.L["tooltip.spec"] or "Spec"
+            AddStatLine(tip, label, specName)
+            if role == nil or role == "NONE" then
+                if type(specRole) == "string" then role = specRole end
             end
         end
     end
 
-    if role and role ~= "NONE" then
-        local label = (addon.L and addon.L["tooltip.role"]) or "Role"
+    if type(role) == "string" and role ~= "NONE" then
+        local label = addon.L and addon.L["tooltip.role"] or "Role"
         AddStatLine(tip, label, _G[role] or role)
     end
 end
 
-local function strip(text)
-    if (addon:IsSecret(text) or type(text) ~= "string") then
-        return ""
-    end
+local function Strip(text)
+    if not CanAccess(text) or type(text) ~= "string" then return "" end
     return (text:gsub("%s+([|%x%s]+)<trim>", "%1"))
 end
 
+local function SafeColorFunction(name, raw)
+    local fn = addon.colorfunc and addon.colorfunc[name]
+    if type(fn) ~= "function" then return nil end
+    local ok, r, g, b = pcall(fn, raw)
+    if not ok or not CanAccessAll(r, g, b) then return nil end
+    if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then return nil end
+    return r, g, b
+end
+
 local function ColorBorder(tip, config, raw)
-    if (config.coloredBorder and addon.colorfunc[config.coloredBorder]) then
-        local r, g, b = addon.colorfunc[config.coloredBorder](raw)
+    if not addon:IsTooltipSafe(tip) or type(config) ~= "table" then return end
+
+    local mode = config.coloredBorder
+    local r, g, b = SafeColorFunction(mode, raw)
+    if r then
         LibEvent:trigger("tooltip.style.border.color", tip, r, g, b)
-    elseif (type(config.coloredBorder) == "string" and config.coloredBorder ~= "default") then
-        local r, g, b = addon:GetRGBColor(config.coloredBorder)
-        if (r and g and b) then
-            LibEvent:trigger("tooltip.style.border.color", tip, r, g, b)
-        end
+    elseif type(mode) == "string" and mode ~= "default" then
+        r, g, b = addon:GetRGBColor(mode)
+        LibEvent:trigger("tooltip.style.border.color", tip, r, g, b)
     else
-        LibEvent:trigger("tooltip.style.border.color", tip, unpack(addon.db.general.borderColor))
+        local color = addon.db and addon.db.general and addon.db.general.borderColor
+        if type(color) == "table" then
+            LibEvent:trigger("tooltip.style.border.color", tip, unpack(color))
+        end
     end
 end
 
 local function ColorBackground(tip, config, raw)
-    local bg = config.background
-    if not bg then return end
-    if (bg.colorfunc == "default" or bg.colorfunc == "" or bg.colorfunc == "inherit") then
-        local r, g, b, a = unpack(addon.db.general.background)
-        a = bg.alpha or a
+    if not addon:IsTooltipSafe(tip) or type(config) ~= "table" then return end
+    local background = config.background
+    if type(background) ~= "table" then return end
+
+    local mode = background.colorfunc
+    if mode == "default" or mode == "" or mode == "inherit" then
+        local color = addon.db and addon.db.general and addon.db.general.background
+        if type(color) ~= "table" then return end
+        local r, g, b, a = unpack(color)
+        if type(background.alpha) == "number" then a = background.alpha end
         LibEvent:trigger("tooltip.style.background", tip, r, g, b, a)
         return
     end
-    if (addon.colorfunc[bg.colorfunc]) then
-        local r, g, b = addon.colorfunc[bg.colorfunc](raw)
-        local a = bg.alpha or 0.8
-        LibEvent:trigger("tooltip.style.background", tip, r, g, b, a)
+
+    local r, g, b = SafeColorFunction(mode, raw)
+    if r then
+        local alpha = type(background.alpha) == "number" and background.alpha or 0.8
+        LibEvent:trigger("tooltip.style.background", tip, r, g, b, alpha)
     end
 end
 
 local function GrayForDead(tip, config, unit)
-    local dead = UnitIsDeadOrGhost(unit)
-    if (addon:IsSecret(dead)) then dead = nil end
-    if (not config.grayForDead or not dead) then return end
-
-    local name = tip and tip.GetName and tip:GetName()
-    if (not name) then
-        -- Only named tooltip templates expose $parentTextLeftN; avoid hard errors.
-        return
-    end
+    if type(config) ~= "table" or config.grayForDead ~= true then return end
+    if addon:SafeCallBoolean(UnitIsDeadOrGhost, unit) ~= true then return end
+    if not addon:IsTooltipSafe(tip) then return end
 
     LibEvent:trigger("tooltip.style.border.color", tip, 0.6, 0.6, 0.6)
     LibEvent:trigger("tooltip.style.background", tip, 0.1, 0.1, 0.1)
 
-    for i = 1, tip:NumLines() do
-        local line = _G[name .. "TextLeft" .. i]
-        if (line) then
-            local text = line:GetText()
-            if (not addon:IsSecret(text) and text) then
-                text = (text or ""):gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa")
-                line:SetText(text)
+    local name = addon:SafeMethod(tip, "GetName")
+    local lineCount = addon:SafeMethod(tip, "NumLines")
+    if type(name) ~= "string" or type(lineCount) ~= "number" then return end
+
+    for index = 1, lineCount do
+        local line = _G[name .. "TextLeft" .. index]
+        if addon:IsObjectAccessible(line) then
+            local text = addon:SafeMethod(line, "GetText")
+            if CanAccess(text) and type(text) == "string" then
+                text = text:gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa")
+                addon:SafeMethod(line, "SetText", text)
             end
-            line:SetTextColor(0.7, 0.7, 0.7)
+            addon:SafeMethod(line, "SetTextColor", 0.7, 0.7, 0.7)
         end
     end
 end
 
 local function ShowBigFactionIcon(tip, config, raw)
-    if (config.elements.factionBig and config.elements.factionBig.enable and tip.BigFactionIcon and (raw.factionGroup=="Alliance" or raw.factionGroup == "Horde")) then
-        tip.BigFactionIcon:Show()
-        tip.BigFactionIcon:SetTexture("Interface\\Timer\\".. raw.factionGroup .."-Logo")
-	    -- Width/Wrap handled centrally in Engine/Layout.
+    local elements = type(config) == "table" and config.elements or nil
+    local factionConfig = type(elements) == "table" and elements.factionBig or nil
+    local faction = type(raw) == "table" and raw.factionGroup or nil
+    if type(factionConfig) ~= "table" or factionConfig.enable ~= true then return end
+    if faction ~= "Alliance" and faction ~= "Horde" then return end
+
+    local icon = addon:SafeGet(tip, "BigFactionIcon")
+    if not addon:IsObjectAccessible(icon) then return end
+    addon:SafeMethod(icon, "SetTexture", "Interface\\Timer\\" .. faction .. "-Logo")
+    addon:SafeMethod(icon, "Show")
+end
+
+local function HideLineRange(tip, first, last)
+    local name = addon:SafeMethod(tip, "GetName")
+    local lineCount = addon:SafeMethod(tip, "NumLines")
+    if type(name) ~= "string" or type(lineCount) ~= "number" then return end
+
+    last = math.min(last or lineCount, lineCount)
+    for index = first, last do
+        local line = _G[name .. "TextLeft" .. index]
+        if addon:IsObjectAccessible(line) then addon:SafeMethod(line, "SetText", nil) end
     end
+end
+
+local function SetTooltipLine(tip, index, text)
+    if type(text) ~= "string" then return end
+    local line = addon:GetLine(tip, index)
+    if addon:IsObjectAccessible(line) then addon:SafeMethod(line, "SetText", text) end
 end
 
 local function PlayerCharacter(tip, unit, config, raw)
     local data = addon:GetUnitData(unit, config.elements, raw)
-    addon:HideLines(tip, 2, 3)
-    addon:HideLine(tip, "^"..LEVEL)
-    addon:HideLine(tip, "^"..FACTION_ALLIANCE)
-    addon:HideLine(tip, "^"..FACTION_HORDE)
-    addon:HideLine(tip, "^"..PVP)
-    for i, v in ipairs(data) do
-        addon:GetLine(tip,i):SetText(strip(table.concat(v, " ")))
+    if type(data) ~= "table" then return end
+
+    HideLineRange(tip, 2, 3)
+    addon:HideLine(tip, "^" .. LEVEL)
+    addon:HideLine(tip, "^" .. FACTION_ALLIANCE)
+    addon:HideLine(tip, "^" .. FACTION_HORDE)
+    addon:HideLine(tip, "^" .. PVP)
+
+    for index, values in ipairs(data) do
+        if type(values) == "table" then
+            SetTooltipLine(tip, index, Strip(table.concat(values, " ")))
+        end
     end
+
     ColorBorder(tip, config, raw)
     ColorBackground(tip, config, raw)
     GrayForDead(tip, config, unit)
@@ -426,107 +583,137 @@ local function PlayerCharacter(tip, unit, config, raw)
 end
 
 local function NonPlayerCharacter(tip, unit, config, raw)
-    local levelLine = addon:FindLine(tip, "^"..LEVEL)
-    if (levelLine or tip:NumLines() > 1) then
+    local levelLine = addon:FindLine(tip, "^" .. LEVEL)
+    local lineCount = addon:SafeMethod(tip, "NumLines")
+    if levelLine or (type(lineCount) == "number" and lineCount > 1) then
         local data = addon:GetUnitData(unit, config.elements, raw)
         local titleLine = addon:GetNpcTitle(tip)
-        local increase = 0
-        for i, v in ipairs(data) do
-            if (i == 1) then
-                addon:GetLine(tip,i):SetText(table.concat(v, " "))
-            end
-            if (i == 2) then
-                if (config.elements.npcTitle.enable and titleLine) then
-                    local tt = titleLine:GetText()
-                    if (not addon:IsSecret(tt) and tt) then
-                        titleLine:SetText(addon:FormatData(tt, config.elements.npcTitle, raw))
+        local keepTitle = config.elements and config.elements.npcTitle
+            and config.elements.npcTitle.enable == true and addon:IsObjectAccessible(titleLine)
+        local offset = keepTitle and 1 or 0
+
+        if type(data) == "table" then
+            for index, values in ipairs(data) do
+                if type(values) == "table" then
+                    if index == 1 then
+                        SetTooltipLine(tip, index, table.concat(values, " "))
+                    elseif index == 2 and keepTitle then
+                        local titleText = addon:SafeMethod(titleLine, "GetText")
+                        if CanAccess(titleText) and type(titleText) == "string" then
+                            addon:SafeMethod(titleLine, "SetText", addon:FormatData(titleText, config.elements.npcTitle, raw))
+                        end
+                        SetTooltipLine(tip, index + offset, table.concat(values, " "))
+                    else
+                        SetTooltipLine(tip, index + offset, table.concat(values, " "))
                     end
-                    increase = 1
                 end
-                i = i + increase
-                addon:GetLine(tip,i):SetText(table.concat(v, " "))
-            elseif ( i > 2) then
-                i = i + increase
-                addon:GetLine(tip,i):SetText(table.concat(v, " "))
             end
         end
     end
-    addon:HideLine(tip, "^"..LEVEL)
-    addon:HideLine(tip, "^"..PVP)
+
+    addon:HideLine(tip, "^" .. LEVEL)
+    addon:HideLine(tip, "^" .. PVP)
     ColorBorder(tip, config, raw)
     ColorBackground(tip, config, raw)
     GrayForDead(tip, config, unit)
     ShowBigFactionIcon(tip, config, raw)
-    -- Width sizing: native Blizzard C API (no custom width manipulation).
 end
 
-local function OnTooltipUnit(self, tip, unit, guid, _, context)
-    if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("Unit")) then return end
-    if (addon.AllowTrigger and not addon:AllowTrigger("unit", tip)) then return end
-    local started
-    if (addon.MM and addon.MM.OnCallStart) then started = addon.MM:OnCallStart("Unit", "tooltip:unit") end
-    local token = context and context.unitToken or unit
-    if (type(token) ~= "string") then
-        token = addon:ResolveUnitToken(unit, (context and context.guid) or guid)
+local function ResolveTooltipUnit(unit, guid, context)
+    if CanAccess(context) and type(context) == "table" then
+        local contextUnit = context.unitToken
+        if IsOrdinaryUnit(contextUnit) then return contextUnit end
     end
-    if (not token) then
-        if (addon.MM and addon.MM.OnCallEnd) then addon.MM:OnCallEnd("Unit", started) end
+
+    local contextGUID
+    if CanAccess(context) and type(context) == "table" then contextGUID = context.guid end
+    if type(contextGUID) ~= "string" then contextGUID = guid end
+    return addon:ResolveUnitToken(unit, contextGUID)
+end
+
+local function OnTooltipUnit(_, tip, unit, guid, _, context)
+    if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("Unit") then return end
+    if addon.AllowTrigger and not addon:AllowTrigger("unit", tip) then return end
+    if not addon:IsTooltipSafe(tip) then return end
+
+    local started
+    if addon.MM and addon.MM.OnCallStart then
+        started = addon.MM:OnCallStart("Unit", "tooltip:unit")
+    end
+
+    local token = ResolveTooltipUnit(unit, guid, context)
+    if not IsOrdinaryUnit(token) then
+        if addon.MM and addon.MM.OnCallEnd then addon.MM:OnCallEnd("Unit", started) end
         return
     end
 
     local raw = addon:GetUnitInfo(token)
-    local ok, isPlayer = pcall(UnitIsPlayer, token)
-    if (not ok or addon:IsSecret(isPlayer)) then isPlayer = nil end
-    if (isPlayer) then
-        PlayerCharacter(tip, token, addon.db.unit.player, raw)
-    else
-        NonPlayerCharacter(tip, token, addon.db.unit.npc, raw)
+    local isPlayer = addon:SafeCallBoolean(UnitIsPlayer, token)
+    if type(raw) ~= "table" or isPlayer == nil then
+        if addon.MM and addon.MM.OnCallEnd then addon.MM:OnCallEnd("Unit", started) end
+        return
     end
-    if (addon.MM and addon.MM.OnCallEnd) then addon.MM:OnCallEnd("Unit", started) end
+
+    local unitConfig = addon.db and addon.db.unit
+    if type(unitConfig) == "table" then
+        if isPlayer == true and type(unitConfig.player) == "table" then
+            PlayerCharacter(tip, token, unitConfig.player, raw)
+        elseif isPlayer == false and type(unitConfig.npc) == "table" then
+            NonPlayerCharacter(tip, token, unitConfig.npc, raw)
+        end
+    end
+
+    if addon.MM and addon.MM.OnCallEnd then addon.MM:OnCallEnd("Unit", started) end
 end
 
 local function OnModifierStateChanged()
+    if addon.AreUnitStatsRestricted and addon:AreUnitStatsRestricted() then return end
+
     local unitType = Enum and Enum.TooltipDataType and Enum.TooltipDataType.Unit
-    addon:RefreshManagedTooltipsMatching(function(tip, context)
-        if (context and context.type and unitType) then
-            return context.type == unitType
-        end
+    addon:RefreshManagedTooltipsMatching(function(_, context)
+        if type(context) ~= "table" then return false end
+        if type(unitType) == "number" and context.type == unitType then return true end
         return GetTooltipContextGUID(context) ~= nil
     end, "MODIFIER_STATE_CHANGED")
 end
 
--- Module wrapper
 local M = {}
 
 function M:Init()
-    self.cb = OnTooltipUnit
-    self.cbMod = OnModifierStateChanged
+    self.cbUnit = OnTooltipUnit
+    self.cbModifier = OnModifierStateChanged
+    self.cbInspectReady = OnInspectReady
     self.cbInvalidate = InvalidateRaidCache
 end
 
 function M:Enable()
-    if (addon.MM and addon.MM.AttachTrigger) then
-        addon.MM:AttachTrigger("Unit", "tooltip:unit", self.cb, "tooltip:unit")
+    if addon.MM and addon.MM.AttachTrigger then
+        addon.MM:AttachTrigger("Unit", "tooltip:unit", self.cbUnit, "tooltip:unit")
     else
-        LibEvent:attachTrigger("tooltip:unit", self.cb)
+        LibEvent:attachTrigger("tooltip:unit", self.cbUnit)
     end
 
-    if (addon.MM and addon.MM.AttachEvent) then
-        addon.MM:AttachEvent("Unit", "MODIFIER_STATE_CHANGED", self.cbMod, "MODIFIER_STATE_CHANGED")
+    if addon.MM and addon.MM.AttachEvent then
+        addon.MM:AttachEvent("Unit", "MODIFIER_STATE_CHANGED", self.cbModifier, "MODIFIER_STATE_CHANGED")
+        addon.MM:AttachEvent("Unit", "INSPECT_READY", self.cbInspectReady, "INSPECT_READY")
         addon.MM:AttachEvent("Unit", "PLAYER_ENTERING_WORLD", self.cbInvalidate, "PLAYER_ENTERING_WORLD")
         addon.MM:AttachEvent("Unit", "BOSS_KILL", self.cbInvalidate, "BOSS_KILL")
     else
-        LibEvent:attachEvent("MODIFIER_STATE_CHANGED", self.cbMod)
+        LibEvent:attachEvent("MODIFIER_STATE_CHANGED", self.cbModifier)
+        LibEvent:attachEvent("INSPECT_READY", self.cbInspectReady)
         LibEvent:attachEvent("PLAYER_ENTERING_WORLD", self.cbInvalidate)
         LibEvent:attachEvent("BOSS_KILL", self.cbInvalidate)
     end
 end
 
-function M:Disable() end
+function M:Disable()
+    ClearPendingInspect()
+end
+
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
 
-if (addon.MM and addon.MM.RegisterModule) then
+if addon.MM and addon.MM.RegisterModule then
     addon.MM:RegisterModule("Unit", M)
 end
 
