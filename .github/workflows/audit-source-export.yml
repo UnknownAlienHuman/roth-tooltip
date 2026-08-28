@@ -1,0 +1,30 @@
+name: Audit source export
+
+on:
+  push:
+    branches:
+      - audit/post-merge-12.1.0
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Package source tree
+        run: |
+          zip -qr roth-tooltip-source.zip . \
+            -x '.git/*' \
+            -x 'roth-tooltip-source.zip'
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: roth-tooltip-source
+          path: roth-tooltip-source.zip
+          if-no-files-found: error
+          retention-days: 1
