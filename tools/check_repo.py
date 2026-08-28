@@ -60,6 +60,8 @@ def validate_toc() -> list[str]:
         fail(f"expected Version 12.1.0, got {metadata.get('Version')!r}")
     if "Compat_MoneyFrame.lua" in files:
         fail("obsolete Compat_MoneyFrame.lua is still loaded")
+    if (ROOT / "Compat_MoneyFrame.lua").exists():
+        fail("obsolete Compat_MoneyFrame.lua still exists")
 
     for relative in files:
         if not (ROOT / relative).is_file():
@@ -146,6 +148,7 @@ def validate_markdown_links() -> None:
 
 def validate_runtime_markers() -> None:
     bootstrap = (ROOT / "Engine/TooltipBootstrap.lua").read_text(encoding="utf-8")
+    core = (ROOT / "Core.lua").read_text(encoding="utf-8")
     processor = (ROOT / "Engine/TooltipProcessor.lua").read_text(encoding="utf-8")
     midnight = (ROOT / "Engine/Midnight.lua").read_text(encoding="utf-8")
 
@@ -155,8 +158,18 @@ def validate_runtime_markers() -> None:
         fail("Retail TooltipDataProcessor entrypoint is missing")
     if "canaccessvalue" not in midnight or "C_Secrets" not in midnight:
         fail("Retail access/restriction boundary is incomplete")
+    if "canaccessvalue" not in core:
+        fail("legacy Core helpers are no longer aligned with canaccessvalue")
+    if "pcall(function() return v == v end)" in core:
+        fail("comparison-based secret probing was restored in Core.lua")
+    if "data.args" in processor:
+        fail("Retail processor references raw TooltipData args")
+    if 'LibEvent:trigger("tooltip:aura", tooltip, data' in processor:
+        fail("Retail processor forwards a raw aura payload")
     if "RebuildFromTooltipInfo(" in midnight:
         fail("Midnight runtime actively calls RebuildFromTooltipInfo")
+    if (ROOT / ".github/workflows/normalize-runtime.yml").exists():
+        fail("one-time source-normalization workflow must not remain in the repository")
 
 
 def main() -> int:
@@ -164,7 +177,10 @@ def main() -> int:
     validate_xml_graph(toc_files)
     validate_markdown_links()
     validate_runtime_markers()
-    print("Repository manifest, XML graph, Markdown links, and runtime markers are valid.")
+    print(
+        "Repository manifest, XML graph, Markdown links, and Retail 12.1 "
+        "boundary invariants are valid."
+    )
     return 0
 
 
