@@ -67,8 +67,7 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
 
     if actionLike then
         local explicitSpellID = ReadNumber(suppliedData, "spellID") or ReadNumber(suppliedData, "spellId")
-        local resolvedSpellID = explicitSpellID or ResolveDisplayedSpellID(tooltip)
-        context.spellID = resolvedSpellID
+        context.spellID = explicitSpellID or ResolveDisplayedSpellID(tooltip)
         self:SetPrimaryTooltipContext(tooltip, context)
     end
     return context
@@ -111,14 +110,13 @@ end
 
 local function GetRosterNameAndZone(index)
     if type(index) ~= "number" or type(GetRaidRosterInfo) ~= "function" then return nil, nil end
-    if not addon.CanAccessAllValues or addon:CanAccessAllValues(index) then
-        local ok, name, _, _, _, _, _, zone = pcall(GetRaidRosterInfo, index)
-        if not ok then return nil, nil end
-        if not CanAccess(name) or type(name) ~= "string" then name = nil end
-        if not CanAccess(zone) or type(zone) ~= "string" then zone = nil end
-        return name, zone
-    end
-    return nil, nil
+    if addon.CanAccessAllValues and not addon:CanAccessAllValues(index) then return nil, nil end
+
+    local ok, name, _, _, _, _, _, zone = pcall(GetRaidRosterInfo, index)
+    if not ok then return nil, nil end
+    if not CanAccess(name) or type(name) ~= "string" then name = nil end
+    if not CanAccess(zone) or type(zone) ~= "string" then zone = nil end
+    return name, zone
 end
 
 function addon:GetZone(unit, unitName, realm)
@@ -145,4 +143,37 @@ function addon:GetZone(unit, unitName, realm)
         if name == unitName or name == fullName then return zone end
     end
     return nil
+end
+
+-- Legacy style code remains responsible for the actual look, but every public
+-- entrypoint now validates the tooltip object before touching its regions.
+local BaseApplyGeneralStyle = addon.ApplyGeneralStyleToTooltip
+if type(BaseApplyGeneralStyle) == "function" then
+    function addon:ApplyGeneralStyleToTooltip(tooltip)
+        if not self:IsTooltipSafe(tooltip) then return false end
+        local ok, err = pcall(BaseApplyGeneralStyle, self, tooltip)
+        if not ok then
+            if self.DoctorLog then self:DoctorLog("lua", "Style:ApplyGeneralStyleToTooltip", tostring(err), nil) end
+            return false
+        end
+        return true
+    end
+end
+
+local BaseNormalizeTooltipFrame = addon.NormalizeTooltipFrame
+if type(BaseNormalizeTooltipFrame) == "function" then
+    function addon:NormalizeTooltipFrame(tooltip)
+        if not self:IsTooltipSafe(tooltip) then return false end
+        local ok = pcall(BaseNormalizeTooltipFrame, self, tooltip)
+        return ok
+    end
+end
+
+local BaseResetTooltipStyleFrame = addon.ResetTooltipStyleFrame
+if type(BaseResetTooltipStyleFrame) == "function" then
+    function addon:ResetTooltipStyleFrame(tooltip)
+        if not self:IsTooltipSafe(tooltip) then return false end
+        local ok = pcall(BaseResetTooltipStyleFrame, self, tooltip)
+        return ok
+    end
 end
