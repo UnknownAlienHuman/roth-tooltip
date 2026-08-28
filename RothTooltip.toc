@@ -1,8 +1,8 @@
-## Interface: 120001, 120005
+## Interface: 120100
 ## Title: Roth Tooltip
-## Notes: Roth Tooltip
+## Notes: Roth Tooltip for World of Warcraft: Midnight
 ## Author: Neomorph
-## Version: 12.0.20
+## Version: 12.1.0
 ## SavedVariables: RothTooltipDB
 ## SavedVariablesPerCharacter: RothTooltipCharacterDB
 
@@ -14,7 +14,7 @@ Engine\Doctor.lua
 Engine\Debug.lua
 Engine\Style.lua
 Core.lua
-Compat_MoneyFrame.lua
+Engine\Midnight.lua
 Config.lua
 General.lua
 Anchor.lua
