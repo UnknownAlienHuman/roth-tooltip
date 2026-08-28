@@ -30,6 +30,17 @@ def normalize_repo_path(value: str) -> str:
     return value.strip().replace("\\", "/")
 
 
+def strip_lua_line_comments(source: str) -> str:
+    """Remove line comments for narrow policy-pattern checks.
+
+    This is deliberately not a Lua lexer. The checked patterns are identifiers,
+    not string literals, and the repository's comments commonly name forbidden
+    constructs while documenting why they are excluded.
+    """
+
+    return "\n".join(line.split("--", 1)[0] for line in source.splitlines())
+
+
 def read_toc() -> tuple[list[str], dict[str, str]]:
     if not TOC.is_file():
         fail("RothTooltip.toc is missing")
@@ -151,6 +162,7 @@ def validate_runtime_markers() -> None:
     core = (ROOT / "Core.lua").read_text(encoding="utf-8")
     processor = (ROOT / "Engine/TooltipProcessor.lua").read_text(encoding="utf-8")
     midnight = (ROOT / "Engine/Midnight.lua").read_text(encoding="utf-8")
+    processor_code = strip_lua_line_comments(processor)
 
     if "__RT_DeferTooltipProcessor = true" not in bootstrap:
         fail("Tooltip bootstrap no longer defers the legacy Core processor")
@@ -162,9 +174,9 @@ def validate_runtime_markers() -> None:
         fail("legacy Core helpers are no longer aligned with canaccessvalue")
     if "pcall(function() return v == v end)" in core:
         fail("comparison-based secret probing was restored in Core.lua")
-    if "data.args" in processor:
+    if "data.args" in processor_code or "tooltipData.args" in processor_code:
         fail("Retail processor references raw TooltipData args")
-    if 'LibEvent:trigger("tooltip:aura", tooltip, data' in processor:
+    if 'LibEvent:trigger("tooltip:aura", tooltip, data' in processor_code:
         fail("Retail processor forwards a raw aura payload")
     if "RebuildFromTooltipInfo(" in midnight:
         fail("Midnight runtime actively calls RebuildFromTooltipInfo")
