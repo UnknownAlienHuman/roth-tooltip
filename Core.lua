@@ -57,19 +57,20 @@ end
 -- The goal here is simple: never do Lua-side logic on SecretValue.
 -- We fall back to placeholders or skip optional features.
 --=========================================================
+local __CanAccessValue = (type(canaccessvalue) == "function") and canaccessvalue or nil
 local __IsSecretBase = (type(issecretvalue) == "function") and issecretvalue or nil
 
--- Robust SecretValue detection:
--- Some SecretValue values do not report via issecretvalue(), but still hard-error
--- on any Lua comparison. Detect via a protected self-compare.
+-- Legacy Core helpers still call this local predicate. Keep it aligned with
+-- the Retail 12.1 capability contract: gate directly and never probe a
+-- value through comparison or protected retry.
 local function IsSecret(v)
-    if (__IsSecretBase and __IsSecretBase(v)) then
-        return true
+    if (__CanAccessValue) then
+        return __CanAccessValue(v) ~= true
     end
-    -- Never do boolean tests or comparisons on unknown values.
-    -- Self-compare inside pcall is the most reliable generic probe.
-    local ok = pcall(function() return v == v end)
-    return not ok
+    if (__IsSecretBase) then
+        return __IsSecretBase(v) == true
+    end
+    return false
 end
 
 function addon:IsSecret(v)

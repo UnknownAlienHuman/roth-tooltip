@@ -127,7 +127,8 @@ end
 
 local function UpdateStatusText(bar)
     local general = addon.db and addon.db.general
-    if type(general) ~= "table" or general.statusbarText ~= true or bar.forceHideText == true then
+    if type(general) ~= "table" or general.statusbarText ~= true
+        or addon:SafeGet(bar, "forceHideText") == true then
         ClearStatusText(bar)
         return
     end

@@ -291,12 +291,15 @@ local function OnInspectReady(_, guid)
 
         local now = GetTime and GetTime() or 0
         PruneInspectCache(now)
+        local isNewEntry = inspectCache[guid] == nil
         inspectCache[guid] = {
             ilvl = itemLevel,
             specID = specID,
             time = now,
         }
-        inspectCacheCount = inspectCacheCount + 1
+        if isNewEntry then
+            inspectCacheCount = inspectCacheCount + 1
+        end
     end
 
     ClearPendingInspect()
