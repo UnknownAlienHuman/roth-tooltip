@@ -16,6 +16,7 @@ Engine\Style.lua
 Engine\TooltipBootstrap.lua
 Core.lua
 Engine\Midnight.lua
+Engine\Runtime12_1.lua
 Engine\TooltipProcessor.lua
 Config.lua
 General.lua
