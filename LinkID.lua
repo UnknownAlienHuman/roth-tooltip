@@ -1,183 +1,194 @@
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 
-local function IsSecret(v) return addon:IsSecret(v) end
+local achievementHooks = setmetatable({}, { __mode = "k" })
 
-local function ParseGUIDId(guid)
-    if (not guid or IsSecret(guid) or type(guid) ~= "string") then return end
-    -- Most GUID formats: Type-0-0-0-0-EntryID-SpawnID
-    local a, _, _, _, _, id = strsplit("-", guid)
-    if (not a or not id) then return end
-    local n = tonumber(id)
-    if (not n) then return end
-    if (a == "Creature" or a == "Vehicle" or a == "Pet") then
-        return "NPC", n
-    elseif (a == "GameObject") then
-        return "Object", n
-    end
-    return a, n
+local function CanAccess(value)
+    return not addon.CanAccessValue or addon:CanAccessValue(value)
 end
 
 local function GetSafeNumber(value)
-    if (not IsSecret(value) and type(value) == "number") then
-        return value
+    if not CanAccess(value) or type(value) ~= "number" then return nil end
+    return value
+end
+
+local function EscapePattern(text)
+    if type(text) ~= "string" then return "" end
+    return (text:gsub("(%W)", "%%%1"))
+end
+
+local function ParseGUIDID(guid)
+    if not CanAccess(guid) or type(guid) ~= "string" or guid == "" then return nil end
+
+    local objectType, _, _, _, _, idText = strsplit("-", guid)
+    if type(objectType) ~= "string" or type(idText) ~= "string" then return nil end
+    local id = tonumber(idText)
+    if type(id) ~= "number" then return nil end
+
+    if objectType == "Creature" or objectType == "Vehicle" or objectType == "Pet" then
+        return "NPC", id
+    elseif objectType == "GameObject" then
+        return "Object", id
     end
     return nil
 end
 
-local function EscapePattern(text)
-    if (type(text) ~= "string") then
-        return ""
-    end
-    return (text:gsub("(%W)", "%%%1"))
-end
-
 local function HasIDLine(tooltip, label)
-    if (not tooltip or type(label) ~= "string") then
-        return false
-    end
+    if not addon:IsTooltipSafe(tooltip) or type(label) ~= "string" then return false end
     return addon:FindLine(tooltip, "^" .. EscapePattern(label) .. ":") ~= nil
 end
 
-local function ShowId(tooltip, name, value, noBlankLine)
-    if (not name or not value) then return end
-    if (tooltip.IsForbidden and tooltip:IsForbidden()) then return end
-    local always = addon.db.general.alwaysShowIdInfo
-    local kind = tooltip and tooltip.__RT_LastDispatchKind
-    if (always or kind == "aura" or IsShiftKeyDown() or IsControlKeyDown() or IsAltKeyDown()) then
-        if (not HasIDLine(tooltip, name)) then
-            if (not noBlankLine) then tooltip:AddLine(" ") end
-            tooltip:AddLine(format("%s: |cffffffff%s|r", name, value), 0, 1, 0.8)
-	            -- No :Show() here; Engine/Layout will resize without forcing a refresh.
-        end
-        LibEvent:trigger("tooltip.linkid", tooltip, name, value, noBlankLine)
+local function ModifierRequested()
+    return IsShiftKeyDown() == true or IsControlKeyDown() == true or IsAltKeyDown() == true
+end
+
+local function ShowID(tooltip, label, value, noBlankLine, force)
+    if not addon:IsTooltipSafe(tooltip) then return end
+    if not CanAccess(label) or type(label) ~= "string" or label == "" then return end
+    if not CanAccess(value) or (type(value) ~= "number" and type(value) ~= "string") then return end
+
+    local general = addon.db and addon.db.general
+    local always = type(general) == "table" and general.alwaysShowIdInfo == true
+    if force ~= true and not always and not ModifierRequested() then return end
+
+    if not HasIDLine(tooltip, label) then
+        if noBlankLine ~= true then addon:SafeMethod(tooltip, "AddLine", " ") end
+        addon:SafeMethod(
+            tooltip,
+            "AddLine",
+            string.format("%s: |cffffffff%s|r", label, tostring(value)),
+            0,
+            1,
+            0.8
+        )
     end
+    LibEvent:trigger("tooltip.linkid", tooltip, label, value, noBlankLine)
+end
+
+local function GetContext(tooltip, suppliedContext)
+    if CanAccess(suppliedContext) and type(suppliedContext) == "table" then return suppliedContext end
+    return addon:GetPrimaryTooltipContext(tooltip)
 end
 
 local function ResolveItemID(tooltip, context)
-    local itemID = GetSafeNumber(context and context.itemID)
-    if (not itemID and tooltip) then
-        itemID = GetSafeNumber(tooltip.__RT_LastItemID)
-    end
-    return GetSafeNumber(itemID)
+    context = GetContext(tooltip, context)
+    if type(context) ~= "table" then return nil end
+    return GetSafeNumber(context.itemID)
 end
 
-local function ResolveSpellID(tip, context)
-    local spellID = GetSafeNumber(context and context.spellID)
-    if (not spellID and addon.SafeGetSpellID) then
-        spellID = GetSafeNumber(addon:SafeGetSpellID(tip))
+local function ResolveSpellID(tooltip, context)
+    context = GetContext(tooltip, context)
+    if type(context) == "table" then
+        local spellID = GetSafeNumber(context.spellID)
+        if spellID then return spellID end
     end
-    return spellID
+    return GetSafeNumber(addon:SafeGetSpellID(tooltip))
 end
 
 local function HasRefreshableIDContext(context)
-    if (GetSafeNumber(context and context.id)) then return true end
-    if (GetSafeNumber(context and context.itemID)) then return true end
-    if (GetSafeNumber(context and context.spellID)) then return true end
-    local guid = context and context.guid
-    return (not IsSecret(guid) and type(guid) == "string" and guid ~= "")
+    if not CanAccess(context) or type(context) ~= "table" then return false end
+    if GetSafeNumber(context.id) then return true end
+    if GetSafeNumber(context.itemID) then return true end
+    if GetSafeNumber(context.spellID) then return true end
+    return CanAccess(context.guid) and type(context.guid) == "string" and context.guid ~= ""
 end
 
-local function ShowLinkIdInfo(tooltip, context)
-    local itemID = ResolveItemID(tooltip, context)
-    if (itemID) then
-        ShowId(tooltip, "Item", itemID)
+local function GetButtonID(button, key)
+    if not addon:IsObjectAccessible(button) then return nil end
+    return GetSafeNumber(addon:SafeGet(button, key))
+end
+
+local function ShowAchievementID(button)
+    if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+    if not ModifierRequested() then
+        local general = addon.db and addon.db.general
+        if type(general) ~= "table" or general.alwaysShowIdInfo ~= true then return end
+    end
+
+    local achievementID = GetButtonID(button, "id")
+    if not achievementID or not addon:IsTooltipSafe(GameTooltip) then return end
+
+    addon:SafeMethod(GameTooltip, "SetOwner", button, "ANCHOR_RIGHT", 0, -32)
+    addon:SafeMethod(GameTooltip, "SetText", "|cffffdd22Achievement:|r " .. tostring(achievementID), 0, 1, 0.8)
+    addon:SafeMethod(GameTooltip, "Show")
+end
+
+local function OnQuestLogEnter(button)
+    if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+    local questID = GetButtonID(button, "questID")
+    if questID then ShowID(GameTooltip, "Quest", questID) end
+end
+
+local function HookAchievementButtons(frame, buttonTemplate)
+    if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+    if not addon:IsObjectAccessible(frame) or not CanAccess(buttonTemplate) or type(buttonTemplate) ~= "string" then return end
+    if buttonTemplate ~= "StatTemplate" and buttonTemplate ~= "AchievementTemplate" then return end
+
+    local buttons = addon:SafeGet(frame, "buttons")
+    if type(buttons) ~= "table" then return end
+
+    for _, button in pairs(buttons) do
+        if addon:IsObjectAccessible(button) and not achievementHooks[button] then
+            achievementHooks[button] = true
+            addon:SafeMethod(button, "HookScript", "OnEnter", ShowAchievementID)
+            if buttonTemplate == "AchievementTemplate" then
+                addon:SafeMethod(button, "HookScript", "OnLeave", GameTooltip_Hide)
+            end
+        end
     end
 end
 
-
---=========================================================
--- Module wrapper
---=========================================================
 local M = {}
 
 function M:Init()
     self.__hooked = false
 
-    self.cbItem = function(_, tip, link, context)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        ShowLinkIdInfo(tip, context)
+    self.cbItem = function(_, tip, _, context)
+        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+        ShowID(tip, "Item", ResolveItemID(tip, context))
     end
 
     self.cbSpell = function(_, tip, context)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        local spellID = ResolveSpellID(tip, context)
-        ShowId(tip, "Spell", spellID)
+        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+        ShowID(tip, "Spell", ResolveSpellID(tip, context))
     end
 
-    self.cbAura = function(_, tip, args, aid, context)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        local spellID = ResolveSpellID(tip, context)
-        if (spellID) then
-            ShowId(tip, "Aura", spellID)
-        end
+    self.cbAura = function(_, tip, _, _, context)
+        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+        -- Aura payload itself is never inspected. The ordinary spell ID copied
+        -- into the sanitized tooltip context is sufficient.
+        ShowID(tip, "Aura", ResolveSpellID(tip, context), nil, true)
     end
 
     self.cbGeneric = function(_, tip, label, id, _, context)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        id = (context and context.id) or id
-        if (not tip or not label or not id) then return end
-        if (IsSecret(id)) then return end
-        ShowId(tip, label, id)
-    end
-
-    self.cbUnit = function(_, tip, unit, guid, _, context)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        guid = (context and context.guid) or guid
-        local label, id = ParseGUIDId(guid)
-        if (label and id and not IsSecret(id)) then
-            ShowId(tip, label, id)
+        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+        if CanAccess(context) and type(context) == "table" then
+            id = GetSafeNumber(context.id) or GetSafeNumber(id)
+        else
+            id = GetSafeNumber(id)
         end
+        ShowID(tip, label, id)
     end
 
-    -- Achievement UI
-    self.ShowAchievementId = function(btn)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        if (not addon.db or not addon.db.general) then return end
-        if ((IsShiftKeyDown() or IsControlKeyDown() or IsAltKeyDown() or addon.db.general.alwaysShowIdInfo) and btn.id) then
-            GameTooltip:SetOwner(btn, "ANCHOR_RIGHT", 0, -32)
-            GameTooltip:SetText("|cffffdd22Achievement:|r " .. btn.id, 0, 1, 0.8)
-            GameTooltip:Show()
+    self.cbUnit = function(_, tip, _, guid, _, context)
+        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID") then return end
+        if CanAccess(context) and type(context) == "table"
+            and CanAccess(context.guid) and type(context.guid) == "string" then
+            guid = context.guid
         end
+        local label, id = ParseGUIDID(guid)
+        if label and id then ShowID(tip, label, id) end
     end
 
-    self.cbQuestLogEnter = function(btn)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        if (btn and btn.questID) then
-            ShowId(GameTooltip, "Quest", btn.questID)
-        end
-    end
-
-    self.cbCreateButtons = function(frame, buttonTemplate)
-        if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("LinkID")) then return end
-        if (not frame or not frame.buttons) then return end
-        if (buttonTemplate == "StatTemplate") then
-            for _, button in pairs(frame.buttons) do
-                if (button and button.HookScript and not button.__RT_AchIdHooked) then
-                    button.__RT_AchIdHooked = true
-                    button:HookScript("OnEnter", self.ShowAchievementId)
-                end
-            end
-        elseif (buttonTemplate == "AchievementTemplate") then
-            for _, button in pairs(frame.buttons) do
-                if (button and button.HookScript and not button.__RT_AchIdHooked) then
-                    button.__RT_AchIdHooked = true
-                    button:HookScript("OnEnter", self.ShowAchievementId)
-                    button:HookScript("OnLeave", GameTooltip_Hide)
-                end
-            end
-        end
-    end
-
-    self.cbMod = function()
-        addon:RefreshManagedTooltipsMatching(function(tip, context)
+    self.cbModifier = function()
+        addon:RefreshManagedTooltipsMatching(function(_, context)
             return HasRefreshableIDContext(context)
         end, "MODIFIER_STATE_CHANGED")
     end
 end
 
 function M:Enable()
-    if (addon.MM and addon.MM.AttachTrigger) then
+    if addon.MM and addon.MM.AttachTrigger then
         addon.MM:AttachTrigger("LinkID", "tooltip:item", self.cbItem, "tooltip:item")
         addon.MM:AttachTrigger("LinkID", "tooltip:spell", self.cbSpell, "tooltip:spell")
         addon.MM:AttachTrigger("LinkID", "tooltip:aura", self.cbAura, "tooltip:aura")
@@ -185,30 +196,29 @@ function M:Enable()
         addon.MM:AttachTrigger("LinkID", "tooltip:genericid", self.cbGeneric, "tooltip:genericid")
     end
 
-    if (self.__hooked) then return end
-    self.__hooked = true
+    if not self.__hooked then
+        self.__hooked = true
 
-    -- QuestMapLogTitleButton
-    if (QuestMapLogTitleButton_OnEnter and hooksecurefunc) then
-        hooksecurefunc("QuestMapLogTitleButton_OnEnter", function(btn)
-            local ok, err = pcall(M.cbQuestLogEnter, btn)
-            if (not ok and addon and addon.DoctorLog) then
-                addon:DoctorLog("lua", "LinkID:QuestMapLogTitleButton_OnEnter", tostring(err), nil)
-            end
-        end)
+        if type(QuestMapLogTitleButton_OnEnter) == "function" and type(hooksecurefunc) == "function" then
+            hooksecurefunc("QuestMapLogTitleButton_OnEnter", function(button)
+                local ok, err = pcall(OnQuestLogEnter, button)
+                if not ok and addon.DoctorLog then
+                    addon:DoctorLog("lua", "LinkID:QuestMapLogTitleButton_OnEnter", tostring(err), nil)
+                end
+            end)
+        end
+
+        if type(HybridScrollFrame_CreateButtons) == "function" and type(hooksecurefunc) == "function" then
+            hooksecurefunc("HybridScrollFrame_CreateButtons", function(frame, buttonTemplate)
+                local ok, err = pcall(HookAchievementButtons, frame, buttonTemplate)
+                if not ok and addon.DoctorLog then
+                    addon:DoctorLog("lua", "LinkID:HybridScrollFrame_CreateButtons", tostring(err), nil)
+                end
+            end)
+        end
     end
 
-    -- Achievement UI scroll frames
-    if (HybridScrollFrame_CreateButtons and hooksecurefunc) then
-        hooksecurefunc("HybridScrollFrame_CreateButtons", function(frame, buttonTemplate)
-            local ok, err = pcall(M.cbCreateButtons, frame, buttonTemplate)
-            if (not ok and addon and addon.DoctorLog) then
-                addon:DoctorLog("lua", "LinkID:HybridScrollFrame_CreateButtons", tostring(err), nil)
-            end
-        end)
-    end
-
-    if (addon.MM and addon.MM.Track) then
+    if addon.MM and addon.MM.Track then
         addon.MM:Track("LinkID", self.cbItem, "tooltip:item")
         addon.MM:Track("LinkID", self.cbSpell, "tooltip:spell")
         addon.MM:Track("LinkID", self.cbAura, "tooltip:aura")
@@ -216,10 +226,10 @@ function M:Enable()
         addon.MM:Track("LinkID", self.cbGeneric, "tooltip:genericid")
     end
 
-    if (addon.MM and addon.MM.AttachEvent) then
-        addon.MM:AttachEvent("LinkID", "MODIFIER_STATE_CHANGED", self.cbMod, "MODIFIER_STATE_CHANGED")
+    if addon.MM and addon.MM.AttachEvent then
+        addon.MM:AttachEvent("LinkID", "MODIFIER_STATE_CHANGED", self.cbModifier, "MODIFIER_STATE_CHANGED")
     else
-        LibEvent:attachEvent("MODIFIER_STATE_CHANGED", self.cbMod)
+        LibEvent:attachEvent("MODIFIER_STATE_CHANGED", self.cbModifier)
     end
 end
 
@@ -227,6 +237,6 @@ function M:Disable() end
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
 
-if (addon.MM and addon.MM.RegisterModule) then
+if addon.MM and addon.MM.RegisterModule then
     addon.MM:RegisterModule("LinkID", M)
 end
