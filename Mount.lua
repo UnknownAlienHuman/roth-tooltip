@@ -1,191 +1,188 @@
---[[
-Roth Tooltip - Mount aura helpers
-
-Adds mount source lines to aura tooltips when the aura represents a mount spell.
-Ported to the Midnight engine (module wrapper + safe secret-value handling).
-]]
+-- Roth Tooltip - Mount source enrichment
+--
+-- Mount journal data is cached outside tooltip callbacks. Aura callbacks read
+-- only the ordinary spell ID copied into RothTooltip's sanitized context; raw
+-- AuraData and tooltip args are never inspected.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
-if (not addon) then return end
-if (not C_MountJournal) then return end
 
 local mounts = {}
-local mountScanTicker = nil
+local mountScanTicker
+local lastMountByTooltip = setmetatable({}, { __mode = "k" })
 
-local function IsSecret(v)
-    if (addon and addon.IsSecret) then
-        return addon:IsSecret(v)
-    end
-    if (type(issecretvalue) == "function") then
-        return issecretvalue(v)
-    end
-    return false
+local function CanAccess(value)
+    return not addon.CanAccessValue or addon:CanAccessValue(value)
 end
 
-local function EscapePattern(s)
-    if (type(s) ~= "string") then return "" end
-    return (s:gsub("(%W)", "%%%1"))
+local function Call(fn, ...)
+    if not CanAccess(fn) or type(fn) ~= "function" then return nil end
+    if addon.CanAccessAllValues and not addon:CanAccessAllValues(...) then return nil end
+
+    local ok, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12 = pcall(fn, ...)
+    if not ok then return nil end
+    if not CanAccess(a1) then a1 = nil end
+    if not CanAccess(a2) then a2 = nil end
+    if not CanAccess(a3) then a3 = nil end
+    if not CanAccess(a4) then a4 = nil end
+    if not CanAccess(a5) then a5 = nil end
+    if not CanAccess(a6) then a6 = nil end
+    if not CanAccess(a7) then a7 = nil end
+    if not CanAccess(a8) then a8 = nil end
+    if not CanAccess(a9) then a9 = nil end
+    if not CanAccess(a10) then a10 = nil end
+    if not CanAccess(a11) then a11 = nil end
+    if not CanAccess(a12) then a12 = nil end
+    return a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12
 end
 
-local function GetAllMountSource()
+local function EscapePattern(text)
+    if type(text) ~= "string" then return "" end
+    return (text:gsub("(%W)", "%%%1"))
+end
+
+local function GetAllMountSources()
+    if not C_MountJournal or type(C_MountJournal.GetMountIDs) ~= "function" then return false end
+
     wipe(mounts)
+    local mountIDs = Call(C_MountJournal.GetMountIDs)
+    if type(mountIDs) ~= "table" then return false end
 
-    local mountIDs = C_MountJournal.GetMountIDs()
-    if (type(mountIDs) ~= "table") then return end
-
-    local _, spellID, isCollected, source
     for _, mountID in ipairs(mountIDs) do
-        _, spellID, _, _, _, _, _, _, _, _, isCollected = C_MountJournal.GetMountInfoByID(mountID)
-        _, _, source = C_MountJournal.GetMountInfoExtraByID(mountID)
+        if CanAccess(mountID) and type(mountID) == "number" then
+            local _, spellID, _, _, _, _, _, _, _, _, isCollected = Call(C_MountJournal.GetMountInfoByID, mountID)
+            local _, _, source = Call(C_MountJournal.GetMountInfoExtraByID, mountID)
 
-        if (not IsSecret(spellID) and type(spellID) == "number") then
-            mounts[spellID] = {
-                source = (not IsSecret(source) and source) or nil,
-                isCollected = (not IsSecret(isCollected) and isCollected) or nil,
-            }
+            if type(spellID) == "number" and type(source) == "string" and source ~= "" then
+                mounts[spellID] = {
+                    source = source,
+                    isCollected = isCollected == true,
+                }
+            end
         end
     end
 
-    if (next(mounts)) then return true end
+    return next(mounts) ~= nil
 end
 
 local function StopMountScanTicker()
-    if (mountScanTicker) then
-        mountScanTicker:Cancel()
-        mountScanTicker = nil
-    end
+    if not mountScanTicker then return end
+    local ticker = mountScanTicker
+    mountScanTicker = nil
+    local cancel = addon:SafeGet(ticker, "Cancel")
+    if type(cancel) == "function" then pcall(cancel, ticker) end
 end
 
 local function ScheduleMountScan()
-    if (GetAllMountSource()) then
+    if GetAllMountSources() then
         StopMountScanTicker()
         return
     end
 
     StopMountScanTicker()
+    if not C_Timer or type(C_Timer.NewTicker) ~= "function" then return end
 
     local attempts = 0
     mountScanTicker = C_Timer.NewTicker(2, function()
         attempts = attempts + 1
-        if GetAllMountSource() or attempts >= 5 then
-            StopMountScanTicker()
-        end
+        if GetAllMountSources() or attempts >= 5 then StopMountScanTicker() end
     end)
 end
 
-local function OnPlayerLogin_Mount()
-    -- Delay mount journal scan slightly after login; journal data can populate late.
-    ScheduleMountScan()
-end
-
-local function OnNewMountAdded()
-    ScheduleMountScan()
-end
-
-local function ResolveMountSpellID(tip, context)
-    context = context or addon:GetPrimaryTooltipContext(tip)
-
-    local spellID = context and context.spellID or nil
-    if (not IsSecret(spellID) and type(spellID) == "number") then
-        return spellID
+local function ResolveMountSpellID(tip, suppliedContext)
+    local context = suppliedContext
+    if not CanAccess(context) or type(context) ~= "table" then
+        context = addon:GetPrimaryTooltipContext(tip)
     end
+    if type(context) ~= "table" then return nil end
 
-    return nil
+    local spellID = context.spellID
+    if not CanAccess(spellID) or type(spellID) ~= "number" then return nil end
+    return spellID
 end
 
-local function OnTooltipAura_Mount(self, tip, args, aid, context)
-    if (addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("Mount")) then return end
-    if (not tip) then return end
-    if (addon.AllowTrigger and not addon:AllowTrigger("aura", tip)) then return end
+local function AddMountSource(tip, sourceInfo)
+    if not addon:IsTooltipSafe(tip) or type(sourceInfo) ~= "table" then return end
+    local source = sourceInfo.source
+    if type(source) ~= "string" or source == "" then return end
+
+    local sourcePattern = "^" .. EscapePattern(source) .. "$"
+    local collectedPattern = "^" .. EscapePattern(source) .. ".+" .. EscapePattern(COLLECTED or "Collected") .. "$"
+    if addon:FindLine(tip, sourcePattern) or addon:FindLine(tip, collectedPattern) then return end
+
+    addon:SafeMethod(tip, "AddLine", " ")
+    if sourceInfo.isCollected == true then
+        addon:SafeMethod(tip, "AddDoubleLine", source, COLLECTED or "Collected", 1, 1, 1, 0.1, 1, 0.1)
+    else
+        addon:SafeMethod(tip, "AddLine", source, 1, 1, 1)
+    end
+end
+
+local function OnTooltipAura(_, tip, _, _, context)
+    if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("Mount") then return end
+    if not addon:IsTooltipSafe(tip) then return end
+    if addon.AllowTrigger and not addon:AllowTrigger("aura", tip) then return end
 
     local started
-    if (addon.MM and addon.MM.OnCallStart) then
+    if addon.MM and addon.MM.OnCallStart then
         started = addon.MM:OnCallStart("Mount", "tooltip:aura")
     end
 
     local spellID = ResolveMountSpellID(tip, context)
-
-    if (spellID) then
-        local info = mounts[spellID]
-        if (info and info.source) then
-            if (tip.__RT_LastMountSpellID == spellID) then
-                if (addon.MM and addon.MM.OnCallEnd) then
-                    addon.MM:OnCallEnd("Mount", started)
-                end
-                return
-            end
-
-            local hasSourceLine = addon.FindLine and addon:FindLine(tip, "^" .. EscapePattern(info.source) .. "$")
-            local hasCollectedLine = addon.FindLine and addon:FindLine(tip, "^" .. EscapePattern(info.source) .. ".+" .. EscapePattern(COLLECTED) .. "$")
-            if (not hasSourceLine and not hasCollectedLine) then
-                tip:AddLine(" ")
-                if (info.isCollected) then
-                    tip:AddDoubleLine(info.source, COLLECTED, 1, 1, 1, 0.1, 1, 0.1)
-                else
-                    tip:AddLine(info.source, 1, 1, 1)
-                end
-            end
-            tip.__RT_LastMountSpellID = spellID
-            -- No :Show() here; Engine/Layout will resize without forcing a refresh.
-        end
+    local sourceInfo = type(spellID) == "number" and mounts[spellID] or nil
+    if sourceInfo and lastMountByTooltip[tip] ~= spellID then
+        AddMountSource(tip, sourceInfo)
+        lastMountByTooltip[tip] = spellID
     end
 
-    if (addon.MM and addon.MM.OnCallEnd) then
-        addon.MM:OnCallEnd("Mount", started)
-    end
+    if addon.MM and addon.MM.OnCallEnd then addon.MM:OnCallEnd("Mount", started) end
 end
 
-local function OnTooltipCleared_Mount(self, tip)
-    if (tip) then
-        tip.__RT_LastMountSpellID = nil
-    end
+local function ClearTooltipState(_, tip)
+    if CanAccess(tip) and tip ~= nil then lastMountByTooltip[tip] = nil end
 end
 
--- Module wrapper
 local M = {}
 
 function M:Init()
-    self.cbLogin = OnPlayerLogin_Mount
-    self.cbNewMount = OnNewMountAdded
-    self.cbAura = OnTooltipAura_Mount
-    self.cbCleared = OnTooltipCleared_Mount
+    self.cbLogin = ScheduleMountScan
+    self.cbRefreshMounts = ScheduleMountScan
+    self.cbAura = OnTooltipAura
+    self.cbClear = ClearTooltipState
 end
 
 function M:Enable()
-    if (addon.MM and addon.MM.AttachEvent) then
-        if (IsLoggedIn and IsLoggedIn()) then
+    if addon.MM and addon.MM.AttachEvent then
+        if IsLoggedIn and IsLoggedIn() then
             self.cbLogin()
         else
             addon.MM:AttachEvent("Mount", "PLAYER_LOGIN", self.cbLogin, "PLAYER_LOGIN")
         end
-        addon.MM:AttachEvent("Mount", "NEW_MOUNT_ADDED", self.cbNewMount, "NEW_MOUNT_ADDED")
-        addon.MM:AttachEvent("Mount", "MOUNT_JOURNAL_SEARCH_UPDATED", self.cbNewMount, "MOUNT_JOURNAL_SEARCH_UPDATED")
+        addon.MM:AttachEvent("Mount", "NEW_MOUNT_ADDED", self.cbRefreshMounts, "NEW_MOUNT_ADDED")
+        addon.MM:AttachEvent("Mount", "MOUNT_JOURNAL_SEARCH_UPDATED", self.cbRefreshMounts, "MOUNT_JOURNAL_SEARCH_UPDATED")
     else
-        if (IsLoggedIn and IsLoggedIn()) then
-            self.cbLogin()
-        else
-            LibEvent:attachEvent("PLAYER_LOGIN", self.cbLogin)
-        end
-        LibEvent:attachEvent("NEW_MOUNT_ADDED", self.cbNewMount)
-        LibEvent:attachEvent("MOUNT_JOURNAL_SEARCH_UPDATED", self.cbNewMount)
+        LibEvent:attachEvent("PLAYER_LOGIN", self.cbLogin)
+        LibEvent:attachEvent("NEW_MOUNT_ADDED", self.cbRefreshMounts)
+        LibEvent:attachEvent("MOUNT_JOURNAL_SEARCH_UPDATED", self.cbRefreshMounts)
     end
 
-    if (addon.MM and addon.MM.AttachTrigger) then
+    if addon.MM and addon.MM.AttachTrigger then
         addon.MM:AttachTrigger("Mount", "tooltip:aura", self.cbAura, "tooltip:aura")
-        addon.MM:AttachTrigger("Mount", "tooltip:cleared", self.cbCleared, "tooltip:cleared")
+        addon.MM:AttachTrigger("Mount", "tooltip:cleared, tooltip:hide", self.cbClear, "tooltip:cleared/hide")
     else
         LibEvent:attachTrigger("tooltip:aura", self.cbAura)
-        LibEvent:attachTrigger("tooltip:cleared", self.cbCleared)
+        LibEvent:attachTrigger("tooltip:cleared", self.cbClear)
+        LibEvent:attachTrigger("tooltip:hide", self.cbClear)
     end
 end
 
 function M:Disable()
     StopMountScanTicker()
 end
+
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
 
-if (addon.MM and addon.MM.RegisterModule) then
+if addon.MM and addon.MM.RegisterModule then
     addon.MM:RegisterModule("Mount", M)
 end
