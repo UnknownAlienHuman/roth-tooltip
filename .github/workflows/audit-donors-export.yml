@@ -1,0 +1,48 @@
+name: Audit donor export
+
+on:
+  push:
+    branches:
+      - audit/post-merge-12.1.0
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Blizzard live source subset
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/Gethe/wow-ui-source.git wow-ui-source
+          cd wow-ui-source
+          git sparse-checkout set \
+            Interface/AddOns/Blizzard_APIDocumentationGenerated \
+            Interface/AddOns/Blizzard_SharedXMLGame/Tooltip \
+            Interface/AddOns/Blizzard_ActionBar \
+            Interface/AddOns/Blizzard_UIPanels_Game/Mainline \
+            Interface/AddOns/Blizzard_Settings_Shared
+          cd ..
+
+      - name: Fetch engineering knowledge base
+        run: |
+          git clone --depth 1 \
+            https://github.com/UnknownAlienHuman/wow-addon-engineering-kb.git \
+            wow-addon-engineering-kb
+
+      - name: Package donor material
+        run: |
+          zip -qr roth-tooltip-audit-donors.zip \
+            wow-ui-source \
+            wow-addon-engineering-kb \
+            -x '*/.git/*' \
+            -x 'roth-tooltip-audit-donors.zip'
+
+      - name: Upload donor archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: roth-tooltip-audit-donors
+          path: roth-tooltip-audit-donors.zip
+          if-no-files-found: error
+          retention-days: 1
