@@ -1,0 +1,51 @@
+local function Read(path)
+    local file = assert(io.open(path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    return text
+end
+
+local core = Read("Core.lua")
+local registry = Read("Engine/TooltipRegistry.lua")
+local processor = Read("Engine/TooltipProcessor.lua")
+local lines = Read("Engine/TooltipLines.lua")
+local style = Read("Engine/Style.lua")
+local anchor = Read("Anchor.lua")
+local general = Read("General.lua")
+local schema = Read("Engine/Schema.lua")
+local locale = Read("Engine/Locale.lua")
+local model = Read("Model.lua")
+local mount = Read("Mount.lua")
+
+assert(not core:find("setmetatable%(addon%.L"), "Core replaced Locale ownership")
+assert(not core:find("LibEvent:attach"), "Core retained presentation subscriptions")
+assert(not core:find("GameTooltip_SetDefaultAnchor", 1, true))
+assert(not core:find("TooltipDataProcessor", 1, true))
+assert(not core:find("tooltip.statusbar", 1, true))
+assert(not core:find("function addon:GetNpcTitle", 1, true))
+
+assert(anchor:find("GameTooltip_SetDefaultAnchor", 1, true))
+assert(style:find("SharedTooltip_SetBackdropStyle", 1, true))
+assert(style:find("GameTooltip_SetBackdropStyle", 1, true))
+assert(registry:find("function addon:RegisterTooltipFrame", 1, true))
+assert(registry:find("RequestManagedTooltipRefresh", 1, true))
+assert(processor:find("function addon:InitTooltipDataProcessor", 1, true))
+assert(processor:find("function addon:RedispatchTooltipContext", 1, true))
+assert(lines:find("function addon:GetNpcTitle", 1, true))
+assert(general:find("function addon:RefreshStatusBar", 1, true))
+assert(schema:find("function addon:BuildProfile", 1, true))
+assert(locale:find("function addon:RegisterLocaleOverlay", 1, true))
+assert(model:find("if not rotationActive", 1, true))
+assert(not mount:find("lastMountByTooltip", 1, true))
+
+local concatenated = table.concat({
+    core, registry, processor, lines, style, anchor, general, schema, locale, model, mount,
+}, "\n")
+assert(not concatenated:find("TooltipDataType.Action", 1, true))
+assert(not concatenated:find("dataTypes.Action", 1, true))
+assert(not concatenated:find("RebuildFromTooltipInfo", 1, true))
+assert(not concatenated:find("tooltipData.args", 1, true))
+assert(not concatenated:find("DisableDrawLayer", 1, true))
+assert(not concatenated:find("C_PvP.IsArena", 1, true))
+
+print("owner_boundaries: ok")
