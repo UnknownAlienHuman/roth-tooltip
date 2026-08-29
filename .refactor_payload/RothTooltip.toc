@@ -1,0 +1,36 @@
+## Interface: 120100
+## Title: Roth Tooltip
+## Notes: Roth Tooltip for World of Warcraft: Midnight
+## Author: Neomorph
+## Version: 12.1.0
+## SavedVariables: RothTooltipDB
+## SavedVariablesPerCharacter: RothTooltipCharacterDB
+
+libs\lib.xml
+Engine\Safe.lua
+Engine\Policy.lua
+Engine\ModuleManager.lua
+Engine\Doctor.lua
+Engine\Debug.lua
+Core.lua
+Engine\Midnight.lua
+Engine\Style.lua
+Engine\TooltipRegistry.lua
+Engine\TooltipProcessor.lua
+Config.lua
+General.lua
+Anchor.lua
+Target.lua
+Unit.lua
+Model.lua
+Item.lua
+Spell.lua
+Quest.lua
+LinkID.lua
+Mount.lua
+ExpansionInfo.lua
+SkinFrames.lua
+
+libs\Template.xml
+locales\locales.xml
+Options.lua
