@@ -9,6 +9,10 @@ local function Call(fn, ...)
     return addon:SafeCall("Item", fn, ...)
 end
 
+local function EscapePattern(text)
+    return type(text) == "string" and (text:gsub("(%W)", "%%%1")) or ""
+end
+
 local function NormalizeItemLink(link)
     if addon:CanAccessValue(link) and type(link) == "string" and link ~= "" then return link end
 end
@@ -52,21 +56,29 @@ local function ResolveItemContext(tooltip, explicitLink, suppliedContext)
     }
 end
 
+local function QualityColor(quality)
+    if type(GetItemQualityColor) ~= "function" then return 1, 1, 1 end
+    local first, second, third = Call(GetItemQualityColor, quality)
+    if type(first) == "table" then
+        local red = addon:SafeGet(first, "r") or addon:SafeGet(first, 1)
+        local green = addon:SafeGet(first, "g") or addon:SafeGet(first, 2)
+        local blue = addon:SafeGet(first, "b") or addon:SafeGet(first, 3)
+        if type(red) == "number" and type(green) == "number" and type(blue) == "number" then
+            return red, green, blue
+        end
+    elseif type(first) == "number" and type(second) == "number" and type(third) == "number" then
+        return first, second, third
+    end
+    return 1, 1, 1
+end
+
 local function ApplyBorder(tooltip, quality)
     local itemConfig = addon.db and addon.db.item
     local general = addon.db and addon.db.general
     if type(itemConfig) ~= "table" or type(general) ~= "table" then return end
 
     if itemConfig.coloredItemBorder == true then
-        local red, green, blue = 1, 1, 1
-        if type(GetItemQualityColor) == "function" then
-            local qualityRed, qualityGreen, qualityBlue = Call(GetItemQualityColor, quality)
-            if type(qualityRed) == "number" and type(qualityGreen) == "number"
-                and type(qualityBlue) == "number" then
-                red, green, blue = qualityRed, qualityGreen, qualityBlue
-            end
-        end
-        LibEvent:trigger("tooltip.style.border.color", tooltip, red, green, blue)
+        LibEvent:trigger("tooltip.style.border.color", tooltip, QualityColor(quality))
     elseif type(general.borderColor) == "table" then
         LibEvent:trigger("tooltip.style.border.color", tooltip, unpack(general.borderColor))
     end
@@ -82,8 +94,6 @@ local function ApplyStackCount(tooltip, itemData)
     local text = addon:SafeMethod(line, "GetText")
     if type(text) ~= "string" or text == "" then return end
 
-    -- TooltipDataProcessor can call multiple post-calls for the same display.
-    -- Replace our suffix rather than appending a second copy.
     text = text:gsub("%s+|cff00eeee/%d+|r$", "")
     addon:SafeMethod(line, "SetText", text .. string.format(" |cff00eeee/%d|r", itemData.stackCount))
 end
@@ -99,22 +109,17 @@ local function ApplyItemIcon(tooltip, itemData)
     local text = addon:SafeMethod(line, "GetText")
     if type(text) ~= "string" or text == "" or text:find("^|T") then return end
 
-    addon:SafeMethod(
-        line,
-        "SetFormattedText",
-        "|T%s:16:16:0:0:32:32:2:30:2:30|t %s",
-        tostring(texture),
-        text
-    )
+    addon:SafeMethod(line, "SetFormattedText",
+        "|T%s:16:16:0:0:32:32:2:30:2:30|t %s", tostring(texture), text)
 end
 
 local function ApplyItemIDLine(tooltip, itemData)
     local config = addon.db and addon.db.item
-    if type(config) ~= "table" or config.showItemID ~= true then return end
-    if type(itemData.itemID) ~= "number" then return end
+    if type(config) ~= "table" or config.showItemID ~= true or type(itemData.itemID) ~= "number" then return end
 
-    local label = addon.L and addon.L["tooltip.itemID"] or "ItemID"
-    if addon:FindLine(tooltip, "^" .. label .. ":") then return end
+    local label = type(addon.Localize) == "function"
+        and addon:Localize("tooltip.itemID", "Item ID") or "Item ID"
+    if addon:FindLine(tooltip, "^" .. EscapePattern(label) .. ":") then return end
     addon:SafeMethod(tooltip, "AddLine",
         string.format("%s: |cffffffff%d|r", label, itemData.itemID), 0, 1, 0.8)
 end
@@ -131,15 +136,8 @@ local function OnTooltipItem(_, tooltip, link, context)
 end
 
 local M = {}
-
-function M:Init()
-    self.cbItem = OnTooltipItem
-end
-
-function M:Enable()
-    addon.MM:AttachTrigger("Item", "tooltip:item", self.cbItem, "tooltip:item")
-end
-
+function M:Init() self.cbItem = OnTooltipItem end
+function M:Enable() addon.MM:AttachTrigger("Item", "tooltip:item", self.cbItem, "tooltip:item") end
 function M:Disable() end
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
