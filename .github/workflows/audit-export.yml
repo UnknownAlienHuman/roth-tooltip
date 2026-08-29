@@ -1,9 +1,7 @@
 name: Deep audit source export
 
 on:
-  push:
-    branches:
-      - audit/deep-ownership-pass
+  workflow_dispatch:
 
 permissions:
   contents: read
