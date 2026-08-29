@@ -1,7 +1,8 @@
 local _, addon = ...
 
--- These frames are created by load-on-demand Blizzard modules or third-party
--- addons. Missing globals are expected; ADDON_LOADED resynchronizes the set.
+-- These frames are created by load-on-demand Blizzard modules or selected
+-- third-party addons. Missing globals are expected; only relevant ADDON_LOADED
+-- events resynchronize the set.
 local EXTRA_FRAME_NAMES = {
     "AtlasLootTooltip",
     "AutoCompleteBox",
@@ -51,6 +52,23 @@ local function SyncExtraFrames()
     RegisterOwned(storyTooltip)
 end
 
+local function RelevantAddon(name)
+    return type(name) == "string" and (
+        name == "RothTooltip"
+        or name == "AtlasLootClassic"
+        or name == "AtlasLoot"
+        or name:find("^Blizzard_PlayerSpells") ~= nil
+        or name:find("^Blizzard_Collections") ~= nil
+        or name:find("^Blizzard_PetBattle") ~= nil
+        or name:find("^Blizzard_Garrison") ~= nil
+        or name:find("^Blizzard_FriendsFrame") ~= nil
+    )
+end
+
+local function OnAddonLoaded(_, name)
+    if RelevantAddon(name) then SyncExtraFrames() end
+end
+
 local function OnVariableChanged(_, key)
     if key == "general.skinMoreFrames" then SyncExtraFrames() end
 end
@@ -59,13 +77,15 @@ local M = {}
 
 function M:Init()
     self.cbSync = SyncExtraFrames
+    self.cbAddonLoaded = OnAddonLoaded
     self.cbVariable = OnVariableChanged
 end
 
 function M:Enable()
     addon.MM:AttachTrigger("SkinFrames", "tooltip:variables:loaded", self.cbSync, "variables-loaded")
     addon.MM:AttachTrigger("SkinFrames", "tooltip:variable:changed", self.cbVariable, "variable-changed")
-    addon.MM:AttachEvent("SkinFrames", "PLAYER_LOGIN, ADDON_LOADED", self.cbSync, "frame-sync")
+    addon.MM:AttachEvent("SkinFrames", "PLAYER_LOGIN", self.cbSync, "PLAYER_LOGIN")
+    addon.MM:AttachEvent("SkinFrames", "ADDON_LOADED", self.cbAddonLoaded, "ADDON_LOADED")
     if addon.db then SyncExtraFrames() end
 end
 
