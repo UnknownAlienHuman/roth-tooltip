@@ -73,14 +73,28 @@ local function OnTooltipUnit(_, tooltip, _, _, _, context)
     end
 end
 
+local function OnUnitTarget(_, changedUnit)
+    if not IsOrdinaryUnit(changedUnit) then return end
+    addon:RequestManagedTooltipRefresh(function(_, context)
+        local displayedUnit = type(context) == "table" and context.unitToken or nil
+        if not IsOrdinaryUnit(displayedUnit)
+            or not addon:CanCompareUnitTokens(displayedUnit, changedUnit) then
+            return false
+        end
+        return addon:SafeCallBoolean(UnitIsUnit, displayedUnit, changedUnit) == true
+    end, "UNIT_TARGET")
+end
+
 local M = {}
 
 function M:Init()
     self.cbUnit = OnTooltipUnit
+    self.cbUnitTarget = OnUnitTarget
 end
 
 function M:Enable()
     addon.MM:AttachTrigger("Target", "tooltip:unit", self.cbUnit, "tooltip:unit")
+    addon.MM:AttachEvent("Target", "UNIT_TARGET", self.cbUnitTarget, "UNIT_TARGET")
 end
 
 function M:Disable() end
