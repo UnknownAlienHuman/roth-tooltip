@@ -24,7 +24,7 @@ local function GetTooltipLines(tooltip, create)
     if not addon:IsObjectAccessible(tooltip) then return nil end
     local lines = LinesByTooltip[tooltip]
     if not lines and create == true then
-        lines = {}
+        lines = { lastIndex = 0 }
         LinesByTooltip[tooltip] = lines
     end
     return lines
@@ -38,12 +38,17 @@ local function TrackRenderedLine(tooltip, lineData)
     if lineType == nil or lineIndex == nil or lineIndex < 1 then return end
 
     local lines = GetTooltipLines(tooltip, true)
-    local indexes = lines[lineType]
-    if not indexes then
-        indexes = {}
-        lines[lineType] = indexes
+    -- The first rendered line marks a new ProcessLines generation. This reset
+    -- does not depend on OnTooltipCleared hooks, which may be temporarily
+    -- forbidden during restriction transitions.
+    if lineIndex == 1 or lineIndex < (lines.lastIndex or 0) then
+        lines = { lastIndex = 0 }
+        LinesByTooltip[tooltip] = lines
     end
+    lines.lastIndex = math.max(lines.lastIndex or 0, lineIndex)
 
+    local indexes = lines[lineType]
+    if not indexes then indexes = {}; lines[lineType] = indexes end
     if indexes[#indexes] ~= lineIndex then indexes[#indexes + 1] = lineIndex end
 end
 
@@ -86,9 +91,7 @@ local addLinePostCall = processor and processor.AddLinePostCall
 local lineTypes = Enum and Enum.TooltipDataLineType
 if type(addLinePostCall) == "function" and type(lineTypes) == "table" then
     for _, lineType in pairs(lineTypes) do
-        if type(lineType) == "number" then
-            pcall(addLinePostCall, lineType, TrackRenderedLine)
-        end
+        if type(lineType) == "number" then pcall(addLinePostCall, lineType, TrackRenderedLine) end
     end
 elseif addon.DoctorLog then
     addon:DoctorLog("api", "TooltipLines", "TooltipDataProcessor.AddLinePostCall unavailable", nil)
