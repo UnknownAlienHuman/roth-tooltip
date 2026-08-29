@@ -15,6 +15,7 @@ Engine\Debug.lua
 Core.lua
 Engine\Midnight.lua
 Engine\Style.lua
+Engine\StyleController.lua
 Engine\TooltipRegistry.lua
 Engine\TooltipLines.lua
 Engine\TooltipProcessor.lua
