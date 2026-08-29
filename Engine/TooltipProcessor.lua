@@ -1,25 +1,21 @@
--- RothTooltip Retail 12.1 TooltipDataProcessor bridge
+-- RothTooltip Retail 12.1 TooltipDataProcessor bridge.
 --
 -- Raw TooltipData is consumed only by Engine/Midnight.lua. Feature modules
--- receive a sanitized table containing ordinary primitive fields; raw aura
--- records and TooltipData argument vectors are never forwarded or retained.
+-- receive a sanitized primitive context; raw aura records and argument vectors
+-- are never forwarded or retained.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 
-local function IsManagedTooltip(tooltip)
-    return type(addon.IsManagedTooltip) == "function" and addon:IsManagedTooltip(tooltip)
-end
-
 local function WantTrigger(eventName)
-    if addon.MM and type(addon.MM.HasTriggerSubscribers) == "function" then
-        return addon.MM:HasTriggerSubscribers(eventName) == true
-    end
-    return true
+    return addon.MM and addon.MM:HasTriggerSubscribers(eventName) == true
 end
 
 local function BuildContext(tooltip, tooltipData)
-    if not addon:CanAccessValue(tooltipData) then return nil end
+    if not addon:CanAccessValue(tooltipData) then
+        addon:SetPrimaryTooltipContext(tooltip, nil)
+        return nil
+    end
     return addon:GetPrimaryTooltipContext(tooltip, tooltipData)
 end
 
@@ -38,9 +34,9 @@ local function CheckVisibility(tooltip, context, unitType)
     if visibility.actionBars == "hide" and addon:IsActionBar(tooltip) then return false end
 
     if InCombatLockdown() then
-        local combatMode = visibility.inCombat or "show"
-        if combatMode == "hide" then return false end
-        if combatMode == "unitOnly" and not IsUnitContext(context, unitType) then return false end
+        local mode = visibility.inCombat or "show"
+        if mode == "hide" then return false end
+        if mode == "unitOnly" and not IsUnitContext(context, unitType) then return false end
     end
 
     if visibility.inRaid == "hide" and addon:SafeCallBoolean(IsInRaid) == true then return false end
@@ -52,7 +48,7 @@ local function CheckVisibility(tooltip, context, unitType)
 end
 
 local function Prepare(tooltip, tooltipData, unitType)
-    if not IsManagedTooltip(tooltip) then return nil end
+    if not addon:IsManagedTooltip(tooltip) then return nil end
 
     local context = BuildContext(tooltip, tooltipData)
     if not CheckVisibility(tooltip, context, unitType) then
@@ -113,6 +109,8 @@ local function CreateAuraDispatcher(unitType)
         local context = Prepare(tooltip, tooltipData, unitType)
         if not ContextHasSpell(context) or not addon:AllowTrigger("aura", tooltip) then return end
         if WantTrigger("tooltip:aura") then
+            -- Preserve the historic trigger arity while never forwarding raw
+            -- AuraData or TooltipData.args.
             LibEvent:trigger("tooltip:aura", tooltip, nil, context.spellID, context)
         end
     end
@@ -158,12 +156,8 @@ function addon:InitTooltipDataProcessor()
     local dataTypes = Enum and Enum.TooltipDataType
     if type(addPostCall) ~= "function" or type(dataTypes) ~= "table" then
         if self.DoctorLog then
-            self:DoctorLog(
-                "api",
-                "TooltipDataProcessor",
-                "AddTooltipPostCall or Enum.TooltipDataType unavailable",
-                nil
-            )
+            self:DoctorLog("api", "TooltipDataProcessor",
+                "AddTooltipPostCall or Enum.TooltipDataType unavailable", nil)
         end
         return false
     end
@@ -186,12 +180,8 @@ function addon:InitTooltipDataProcessor()
         local ok, errorMessage = pcall(addPostCall, typeID, callback)
         if not ok then
             if addon.DoctorLog then
-                addon:DoctorLog(
-                    "api",
-                    "TooltipDataProcessor:" .. tostring(typeID),
-                    tostring(errorMessage),
-                    nil
-                )
+                addon:DoctorLog("api", "TooltipDataProcessor:" .. tostring(typeID),
+                    addon:SafeToString(errorMessage, "registration failed"), nil)
             end
             return false
         end
