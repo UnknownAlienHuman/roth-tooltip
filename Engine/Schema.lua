@@ -50,13 +50,8 @@ local function NormalizeNumericKeys(value, seen)
 end
 
 local function CompatibleScalar(defaultValue, storedValue)
-    if storedValue == nil then return DeepCopy(defaultValue) end
-    if type(defaultValue) == type(storedValue) then return DeepCopy(storedValue) end
-
-    -- Numeric settings imported from JSON may arrive as integral numbers, but
-    -- never accept string/boolean/table coercion at the persistence boundary.
-    if type(defaultValue) == "number" and type(storedValue) == "number" then
-        return storedValue
+    if storedValue ~= nil and type(defaultValue) == type(storedValue) then
+        return DeepCopy(storedValue)
     end
     return DeepCopy(defaultValue)
 end
@@ -70,12 +65,23 @@ local MergeKnown
 local function MergeElements(defaults, stored, path)
     local result = {}
     local valid = {}
+    local defaultRows = {}
+    local defaultRowFor = {}
 
     for key, defaultValue in pairs(defaults) do
         if type(key) ~= "number" then
             valid[key] = true
             result[key] = MergeKnown(defaultValue, type(stored) == "table" and stored[key] or nil,
                 JoinPath(path, key))
+        end
+    end
+
+    for rowIndex, defaultRow in ipairs(defaults) do
+        defaultRows[rowIndex] = DeepCopy(defaultRow)
+        for _, elementKey in ipairs(defaultRow) do
+            if valid[elementKey] and defaultRowFor[elementKey] == nil then
+                defaultRowFor[elementKey] = rowIndex
+            end
         end
     end
 
@@ -103,21 +109,27 @@ local function MergeElements(defaults, stored, path)
     end
 
     if #rows == 0 then
-        for _, defaultRow in ipairs(defaults) do
-            rows[#rows + 1] = DeepCopy(defaultRow)
-            for _, elementKey in ipairs(defaultRow) do seenElement[elementKey] = true end
+        rows = defaultRows
+        for _, row in ipairs(rows) do
+            for _, elementKey in ipairs(row) do seenElement[elementKey] = true end
+        end
+    else
+        for rowIndex = 1, #defaultRows do rows[rowIndex] = rows[rowIndex] or {} end
+        -- Add schema elements in deterministic default-row order. Existing
+        -- user ordering remains untouched.
+        for rowIndex, defaultRow in ipairs(defaultRows) do
+            for _, elementKey in ipairs(defaultRow) do
+                if valid[elementKey] and not seenElement[elementKey] then
+                    rows[rowIndex][#rows[rowIndex] + 1] = elementKey
+                    seenElement[elementKey] = true
+                end
+            end
         end
     end
 
-    rows[1] = rows[1] or {}
-    for key in pairs(valid) do
-        if key ~= "factionBig" and key ~= "npcTitle" and not seenElement[key] then
-            table.insert(rows[1], 1, key)
-            seenElement[key] = true
-        end
+    for index, row in ipairs(rows) do
+        if #row > 0 then result[#result + 1] = row end
     end
-
-    for index, row in ipairs(rows) do result[index] = row end
     return result
 end
 
