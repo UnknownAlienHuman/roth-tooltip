@@ -1,7 +1,7 @@
 local _, addon = ...
 
 addon.db = {
-    version = 3.2,
+    version = 3.3,
     general = {
         scale = 1,
         mask = true,
@@ -14,6 +14,7 @@ addon.db = {
         statusbarPosition = "bottom",
         statusbarOffsetX = 0,
         statusbarOffsetY = 0,
+        statusbarFont = "default",
         statusbarFontSize = 10,
         statusbarFontFlag = "THINOUTLINE",
         statusbarText = true,
@@ -27,6 +28,10 @@ addon.db = {
             returnOnUnitFrame = false,
             cp = "BOTTOM",
             p = "BOTTOMRIGHT",
+            x = 0,
+            y = 0,
+            cx = 0,
+            cy = 20,
         },
         alwaysShowIdInfo = true,
         skinMoreFrames = true,
@@ -57,6 +62,10 @@ addon.db = {
                 returnOnUnitFrame = false,
                 cp = "BOTTOM",
                 p = "BOTTOMRIGHT",
+                x = 0,
+                y = 0,
+                cx = 0,
+                cy = 20,
             },
             showTarget = true,
             showModel = true,
@@ -117,6 +126,10 @@ addon.db = {
                 returnOnUnitFrame = false,
                 cp = "BOTTOM",
                 p = "BOTTOMRIGHT",
+                x = 0,
+                y = 0,
+                cx = 0,
+                cy = 20,
             },
             elements = {
                 factionBig = { enable = false, filter = "none" },
