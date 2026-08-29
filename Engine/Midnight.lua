@@ -1,14 +1,18 @@
--- RothTooltip Engine: authoritative Retail 12.1 tooltip data boundary.
+-- RothTooltip authoritative Retail 12.1 data boundary.
 --
--- This file owns restriction predicates, sanitized tooltip context, safe
--- type-preserving refresh, owner-chain helpers, line access, and ordinary unit
--- metadata. Managed-frame lifecycle is owned by Engine/TooltipRegistry.lua.
+-- Raw TooltipData is normalized here into ordinary primitives. Feature modules
+-- never receive raw TooltipData, AuraData, or args vectors. This layer also
+-- owns type-preserving refresh and bounded ordinary unit metadata caches.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 
-local ContextByTooltip = addon.__RT_ContextByTooltip or setmetatable({}, { __mode = "k" })
-addon.__RT_ContextByTooltip = ContextByTooltip
+local ContextByTooltip = setmetatable({}, { __mode = "k" })
+local FriendIconCache = {}
+local RosterZoneCache = {}
+local FRIEND_CACHE_TTL = 30
+local FRIEND_CACHE_MAX = 128
+local ROSTER_CACHE_TTL = 5
 
 local function CanAccess(value)
     return addon:CanAccessValue(value)
@@ -40,8 +44,6 @@ local function ReadString(tbl, key)
 end
 
 local function QuerySecretPredicate(fn, ...)
-    -- RothTooltip targets Retail 12.1. Missing patch-critical predicates are a
-    -- denied capability, not permission to probe the underlying API.
     if type(fn) ~= "function" or not CanAccessAll(...) then return true end
     local ok, result = pcall(fn, ...)
     if not ok or not CanAccess(result) then return true end
@@ -85,7 +87,6 @@ end
 function addon:CanCompareUnitTokens(unit1, unit2)
     if not CanAccessAll(unit1, unit2) then return false end
     if type(unit1) ~= "string" or type(unit2) ~= "string" then return false end
-
     local fn = C_Secrets and C_Secrets.CanCompareUnitTokens
     if type(fn) ~= "function" then return false end
     local ok, result = pcall(fn, unit1, unit2)
@@ -107,11 +108,9 @@ end
 
 local function GetTooltipPrimaryData(tooltip, suppliedData)
     if suppliedData ~= nil then
-        if not CanAccess(suppliedData) or type(suppliedData) ~= "table" then return nil end
-        return suppliedData
+        if CanAccess(suppliedData) and type(suppliedData) == "table" then return suppliedData end
+        return nil
     end
-
-    if not addon:IsObjectAccessible(tooltip) then return nil end
     local fn = addon:SafeGet(tooltip, "GetPrimaryTooltipData")
     if type(fn) ~= "function" then return nil end
     local data = Call(fn, tooltip)
@@ -127,9 +126,15 @@ local function ResolveItemID(itemInfo)
     local valueType = type(itemInfo)
     if valueType ~= "string" and valueType ~= "number" then return nil end
     if not C_Item or type(C_Item.GetItemInfoInstant) ~= "function" then return nil end
-
     local itemID = Call(C_Item.GetItemInfoInstant, itemInfo)
     if type(itemID) == "number" then return itemID end
+end
+
+local function ResolveDisplayedItem(tooltip)
+    local _, link, itemID = TooltipQuery(TooltipUtil and TooltipUtil.GetDisplayedItem, tooltip)
+    link = NormalizeLink(link)
+    if type(itemID) ~= "number" then itemID = link and ResolveItemID(link) or nil end
+    return link, itemID
 end
 
 local function ResolveDisplayedSpellID(tooltip)
@@ -189,7 +194,6 @@ function addon:ResolveUnitToken(unit, guid)
             return token
         end
     end
-
     if not CanAccess(unit) or type(unit) ~= "string" or unit == "" then return nil end
     if self:IsUnitIdentityRestricted(unit) then return nil end
     return unit
@@ -201,18 +205,11 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
         ContextByTooltip[tooltip] = nil
         return nil
     end
-
-    if suppliedData == nil then
-        local cached = ContextByTooltip[tooltip]
-        if cached then return cached end
-    end
+    if suppliedData == nil and ContextByTooltip[tooltip] then return ContextByTooltip[tooltip] end
 
     local tooltipData = GetTooltipPrimaryData(tooltip, suppliedData)
     local dataTypes = Enum and Enum.TooltipDataType
-    if type(dataTypes) ~= "table" then
-        ContextByTooltip[tooltip] = nil
-        return nil
-    end
+    if type(dataTypes) ~= "table" then ContextByTooltip[tooltip] = nil return nil end
 
     local itemType = dataTypes.Item
     local spellType = dataTypes.Spell
@@ -235,9 +232,9 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
     local suppliedUnit = ReadString(tooltipData, "unitToken") or ReadString(tooltipData, "unit")
 
     if context.type == itemType or TooltipIsType(tooltip, itemType) then
-        local _, displayedLink, displayedItemID = TooltipQuery(TooltipUtil and TooltipUtil.GetDisplayedItem, tooltip)
-        context.hyperlink = NormalizeLink(displayedLink) or context.hyperlink
-        if type(displayedItemID) == "number" then context.itemID = displayedItemID end
+        local link, itemID = ResolveDisplayedItem(tooltip)
+        context.hyperlink = link or context.hyperlink
+        context.itemID = itemID or context.itemID
     end
 
     if context.type == spellType or TooltipIsType(tooltip, spellType) then
@@ -264,30 +261,40 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
         or context.type == flyoutType
         or context.type == macroType
     if actionLike then
-        context.spellID = ReadNumber(tooltipData, "spellID")
-            or ReadNumber(tooltipData, "spellId")
-            or ResolveDisplayedSpellID(tooltip)
+        local link, itemID = ResolveDisplayedItem(tooltip)
+        if link or itemID then
+            context.hyperlink = link or context.hyperlink
+            context.itemID = itemID or context.itemID
+            context.spellID = nil
+        else
+            context.spellID = ReadNumber(tooltipData, "spellID")
+                or ReadNumber(tooltipData, "spellId")
+                or ResolveDisplayedSpellID(tooltip)
+        end
     end
 
-    if context.type == auraType then
-        if self:AreAurasRestricted() or type(context.spellID) ~= "number"
-            or self:IsSpellAuraRestricted(context.spellID) then
-            context.spellID = nil
-        end
+    if context.type == auraType and (
+        self:AreAurasRestricted()
+        or type(context.spellID) ~= "number"
+        or self:IsSpellAuraRestricted(context.spellID)
+    ) then
+        context.spellID = nil
     end
 
     context.unitToken = self:ResolveUnitToken(suppliedUnit, context.guid)
 
     if not tooltipData then
-        local getItem = addon:SafeGet(tooltip, "GetItem")
-        if type(getItem) == "function" and not context.hyperlink then
-            local _, link = Call(getItem, tooltip)
-            context.hyperlink = NormalizeLink(link)
-            if context.hyperlink then context.itemID = ResolveItemID(context.hyperlink) end
+        if not context.hyperlink then
+            local getItem = addon:SafeGet(tooltip, "GetItem")
+            if type(getItem) == "function" then
+                local _, link = Call(getItem, tooltip)
+                context.hyperlink = NormalizeLink(link)
+                if context.hyperlink then context.itemID = ResolveItemID(context.hyperlink) end
+            end
         end
-
-        if not context.spellID then context.spellID = ResolveDisplayedSpellID(tooltip) end
-
+        if not context.spellID and not context.itemID then
+            context.spellID = ResolveDisplayedSpellID(tooltip)
+        end
         if not context.unitToken then
             local getUnit = addon:SafeGet(tooltip, "GetUnit")
             if type(getUnit) == "function" then
@@ -298,13 +305,9 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
     end
 
     if not context.type then
-        if context.itemID or context.hyperlink then
-            context.type = itemType
-        elseif context.unitToken or context.guid then
-            context.type = unitType
-        elseif context.spellID then
-            context.type = spellType
-        end
+        if context.itemID or context.hyperlink then context.type = itemType
+        elseif context.unitToken or context.guid then context.type = unitType
+        elseif context.spellID then context.type = spellType end
     end
     if not context.id then context.id = context.itemID or context.spellID end
 
@@ -314,8 +317,7 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
 end
 
 function addon:SafeGetSpell(tooltip)
-    if not self:IsObjectAccessible(tooltip) then return nil end
-    local fn = addon:SafeGet(tooltip, "GetSpell")
+    local fn = self:IsObjectAccessible(tooltip) and self:SafeGet(tooltip, "GetSpell") or nil
     if type(fn) ~= "function" then return nil end
     return Call(fn, tooltip)
 end
@@ -332,8 +334,7 @@ function addon:GetTooltipUnit(tooltip)
     if not self:IsObjectAccessible(tooltip) then return nil end
     local context = self:GetPrimaryTooltipContext(tooltip)
     if type(context) == "table" and type(context.unitToken) == "string" then return context.unitToken end
-
-    local fn = addon:SafeGet(tooltip, "GetUnit")
+    local fn = self:SafeGet(tooltip, "GetUnit")
     if type(fn) ~= "function" then return nil end
     local _, unit = Call(fn, tooltip)
     return self:ResolveUnitToken(unit, context and context.guid or nil)
@@ -388,7 +389,6 @@ end
 function addon:GetMouseFocusUnit()
     local owner = GetTooltipOwner(GameTooltip)
     if not owner then return nil, nil, nil end
-
     local unitOwner, unit
     WalkOwnerChain(owner, function(frame)
         unit = FrameUnit(frame)
@@ -429,10 +429,8 @@ function addon:IsBag(tooltip)
 end
 
 local function CallTooltipSetter(tooltip, methodName, argument)
-    if not addon:IsObjectAccessible(tooltip) then return false end
-    local fn = addon:SafeGet(tooltip, methodName)
+    local fn = addon:IsObjectAccessible(tooltip) and addon:SafeGet(tooltip, methodName) or nil
     if type(fn) ~= "function" or not CanAccess(argument) then return false end
-
     local ok, result = pcall(fn, tooltip, argument)
     if not ok or not CanAccess(result) then return false end
     return result ~= false
@@ -448,16 +446,19 @@ function addon:RefreshTooltipSafe(tooltip, reason)
     if type(dataTypes) ~= "table" then return false end
 
     if context.type == dataTypes.Unit then
+        if not self:AllowTrigger("unit", tooltip) then return false end
         local unit = context.unitToken
         if type(unit) ~= "string" or self:IsUnitIdentityRestricted(unit) then return false end
         return CallTooltipSetter(tooltip, "SetUnit", unit)
     elseif context.type == dataTypes.Item then
+        if not self:AllowTrigger("item", tooltip) then return false end
         if type(context.hyperlink) == "string" then
             return CallTooltipSetter(tooltip, "SetHyperlink", context.hyperlink)
         elseif type(context.itemID) == "number" then
             return CallTooltipSetter(tooltip, "SetItemByID", context.itemID)
         end
     elseif context.type == dataTypes.Spell and type(context.spellID) == "number" then
+        if not self:AllowTrigger("spell", tooltip) then return false end
         return CallTooltipSetter(tooltip, "SetSpellByID", context.spellID)
     end
     return false
@@ -478,29 +479,6 @@ function addon:RefreshManagedTooltipsMatching(matchFunc, reason)
     return refreshed
 end
 
-function addon:FindLine(tooltip, keyword)
-    if not self:IsTooltipSafe(tooltip) or not CanAccess(keyword) or type(keyword) ~= "string" then return nil end
-    local name = self:SafeMethod(tooltip, "GetName")
-    local lineCount = self:SafeMethod(tooltip, "NumLines")
-    if type(name) ~= "string" or type(lineCount) ~= "number" then return nil end
-
-    for index = 2, lineCount do
-        local line = _G[name .. "TextLeft" .. index]
-        if self:IsObjectAccessible(line) then
-            local text = self:SafeMethod(line, "GetText")
-            if type(text) == "string" then
-                local ok, found = pcall(string.find, text, keyword)
-                if ok and found then return line, index, _G[name .. "TextRight" .. index] end
-            end
-        end
-    end
-end
-
-function addon:HideLine(tooltip, keyword)
-    local line = self:FindLine(tooltip, keyword)
-    if line then self:SafeMethod(line, "SetText", nil) end
-end
-
 function addon:GetLine(tooltip, number)
     if not self:IsTooltipSafe(tooltip) or type(number) ~= "number" or number < 1 then return nil end
     local name = self:SafeMethod(tooltip, "GetName")
@@ -517,6 +495,51 @@ function addon:GetLine(tooltip, number)
     end
     if lineCount < number then return nil end
     return _G[name .. "TextLeft" .. number], _G[name .. "TextRight" .. number]
+end
+
+function addon:FindLine(tooltip, keyword)
+    if not self:IsTooltipSafe(tooltip) or not CanAccess(keyword) or type(keyword) ~= "string" then return nil end
+    local lineCount = self:SafeMethod(tooltip, "NumLines")
+    if type(lineCount) ~= "number" then return nil end
+
+    for index = 1, lineCount do
+        local left, right = self:GetLine(tooltip, index)
+        for _, line in ipairs({ left, right }) do
+            if self:IsObjectAccessible(line) then
+                local text = self:SafeMethod(line, "GetText")
+                if type(text) == "string" then
+                    local ok, found = pcall(string.find, text, keyword)
+                    if ok and found then return left, index, right end
+                end
+            end
+        end
+    end
+end
+
+function addon:ClearLine(tooltip, index)
+    local left, right = self:GetLine(tooltip, index)
+    if self:IsObjectAccessible(left) then self:SafeMethod(left, "SetText", nil) end
+    if self:IsObjectAccessible(right) then self:SafeMethod(right, "SetText", nil) end
+end
+
+function addon:HideLine(tooltip, keyword)
+    local _, index = self:FindLine(tooltip, keyword)
+    if index then self:ClearLine(tooltip, index) end
+end
+
+local function PruneCache(cache, now, ttl, maximum)
+    local count = 0
+    local oldestKey, oldestTime
+    for key, entry in pairs(cache) do
+        local entryTime = type(entry) == "table" and entry.time or nil
+        if type(entryTime) ~= "number" or now - entryTime > ttl then
+            cache[key] = nil
+        else
+            count = count + 1
+            if oldestTime == nil or entryTime < oldestTime then oldestKey, oldestTime = key, entryTime end
+        end
+    end
+    if count >= maximum and oldestKey then cache[oldestKey] = nil end
 end
 
 local function ElementEnabled(elements, key)
@@ -544,8 +567,7 @@ end
 
 function addon:GetRaidIcon(unit)
     local index = Call(GetRaidTargetIndex, unit)
-    if type(index) ~= "number" then return nil end
-    local icon = ICON_LIST and ICON_LIST[index]
+    local icon = type(index) == "number" and ICON_LIST and ICON_LIST[index] or nil
     if type(icon) == "string" then return icon .. "0|t" end
 end
 
@@ -564,12 +586,27 @@ function addon:GetFriendIcon(unit)
     local guid = Call(UnitGUID, unit)
     if type(guid) ~= "string" or guid == "" then return nil end
 
-    if self:SafeCallBoolean(C_FriendList and C_FriendList.IsFriend, guid) then return self.icons.friend end
-    local playerGUID = Call(UnitGUID, "player")
-    if type(playerGUID) ~= "string" or guid == playerGUID then return nil end
+    local now = GetTime and GetTime() or 0
+    local cached = FriendIconCache[guid]
+    if type(cached) == "table" and now - cached.time <= FRIEND_CACHE_TTL then
+        return cached.icon or nil
+    end
 
-    local info = Call(C_BattleNet and C_BattleNet.GetAccountInfoByGUID, guid)
-    if type(info) == "table" and self:SafeBoolean(ReadField(info, "isFriend")) then return self.icons.bnetfriend end
+    PruneCache(FriendIconCache, now, FRIEND_CACHE_TTL, FRIEND_CACHE_MAX)
+    local icon
+    if self:SafeCallBoolean(C_FriendList and C_FriendList.IsFriend, guid) then
+        icon = self.icons.friend
+    else
+        local playerGUID = Call(UnitGUID, "player")
+        if type(playerGUID) == "string" and guid ~= playerGUID then
+            local info = Call(C_BattleNet and C_BattleNet.GetAccountInfoByGUID, guid)
+            if type(info) == "table" and self:SafeBoolean(ReadField(info, "isFriend")) then
+                icon = self.icons.bnetfriend
+            end
+        end
+    end
+    FriendIconCache[guid] = { icon = icon or false, time = now }
+    return icon
 end
 
 function addon:GetUnitSpeed(unit)
@@ -584,21 +621,26 @@ end
 function addon:GetTitle(name, pvpName)
     if type(name) ~= "string" or name == "" or type(pvpName) ~= "string"
         or pvpName == "" or name == pvpName then return nil end
-    local first, last = string.find(pvpName, name, 1, true)
+    local first, last = pvpName:find(name, 1, true)
     if not first then return nil end
-
-    local title = string.sub(pvpName, 1, first - 1) .. string.sub(pvpName, last + 1)
-    title = strtrim((title:gsub(",", ""):gsub("，", "")))
+    local title = strtrim((pvpName:sub(1, first - 1) .. pvpName:sub(last + 1)):gsub("[,，]", ""))
     if title == "" then return nil end
     return title, first ~= 1
 end
 
-local function GetRosterNameAndZone(index)
-    if type(index) ~= "number" or type(GetRaidRosterInfo) ~= "function" then return nil, nil end
-    local name, _, _, _, _, _, zone = Call(GetRaidRosterInfo, index)
-    if type(name) ~= "string" then name = nil end
-    if type(zone) ~= "string" then zone = nil end
-    return name, zone
+local function RebuildRosterZoneCache()
+    wipe(RosterZoneCache)
+    local count = Call(GetNumGroupMembers)
+    if type(count) ~= "number" then count = 0 end
+    for index = 1, math.min(count, 40) do
+        local name, _, _, _, _, _, zone = Call(GetRaidRosterInfo, index)
+        if type(name) == "string" and type(zone) == "string" then
+            RosterZoneCache[name] = zone
+            local shortName = Ambiguate and Ambiguate(name, "short") or name:match("^[^-]+")
+            if type(shortName) == "string" then RosterZoneCache[shortName] = zone end
+        end
+    end
+    RosterZoneCache.time = GetTime and GetTime() or 0
 end
 
 function addon:GetZone(unit, unitName, realm)
@@ -606,21 +648,11 @@ function addon:GetZone(unit, unitName, realm)
         or type(unitName) ~= "string" or type(realm) ~= "string" then return nil end
     if self:SafeCallBoolean(IsInGroup) ~= true then return nil end
 
-    local raidIndex = unit:match("^raid(%d+)$")
-    if raidIndex then
-        local _, zone = GetRosterNameAndZone(tonumber(raidIndex))
-        return zone
+    local now = GetTime and GetTime() or 0
+    if type(RosterZoneCache.time) ~= "number" or now - RosterZoneCache.time > ROSTER_CACHE_TTL then
+        RebuildRosterZoneCache()
     end
-    if not unit:match("^party%d+$") then return nil end
-
-    local fullName = unitName .. "-" .. realm
-    local count = Call(GetNumGroupMembers)
-    if type(count) ~= "number" or count < 1 then count = 5 end
-    count = math.min(count, 40)
-    for index = 1, count do
-        local name, zone = GetRosterNameAndZone(index)
-        if name == unitName or name == fullName then return zone end
-    end
+    return RosterZoneCache[unitName .. "-" .. realm] or RosterZoneCache[unitName]
 end
 
 function addon:GetUnitInfo(unit, elements)
@@ -667,11 +699,12 @@ function addon:GetUnitInfo(unit, elements)
     local role = needRole and Call(UnitGroupRolesAssigned, unit) or nil
     local creature = needCreature and Call(UnitCreatureType, unit) or nil
     local connected = needConnection and self:SafeCallBoolean(UnitIsConnected, unit) or nil
+    local localRealm = Call(GetRealmName)
 
     local raw = {
         unit = unit,
         name = name,
-        realm = realm or GetRealmName(),
+        realm = realm or (type(localRealm) == "string" and localRealm or ""),
         level = level,
         effectiveLevel = effectiveLevel or level,
         levelValue = type(level) == "number" and level >= 0 and level or "??",
@@ -715,6 +748,12 @@ function addon:GetUnitInfo(unit, elements)
     return raw
 end
 
-LibEvent:attachTrigger("tooltip:cleared, tooltip:hide", function(_, tooltip)
+local function ClearOrdinaryCaches()
+    wipe(FriendIconCache)
+    wipe(RosterZoneCache)
+end
+
+LibEvent:attachTrigger("tooltip:cleared, tooltip:hide, tooltip:unregister", function(_, tooltip)
     if CanAccess(tooltip) and tooltip ~= nil then ContextByTooltip[tooltip] = nil end
 end)
+LibEvent:attachEvent("GROUP_ROSTER_UPDATE, FRIENDLIST_UPDATE", ClearOrdinaryCaches)
