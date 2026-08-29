@@ -1,8 +1,8 @@
--- RothTooltip visual engine
+-- RothTooltip visual owner for Retail 12.1.
 --
--- Rendering state is owned by addon weak tables and addon-created regions.
--- Blizzard tooltip methods are never replaced, and arbitrary cache fields are
--- not attached to Blizzard frames.
+-- All bookkeeping lives in weak addon tables. Blizzard tooltip methods are not
+-- replaced, potentially restricted GetRegions() results are not enumerated, and
+-- new visual children are never created during combat.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
@@ -14,61 +14,51 @@ local DEFAULT_BORDER = "Interface\\Tooltips\\UI-Tooltip-Border"
 local ROTH_BACKGROUND = "Interface\\AddOns\\RothTooltip\\texture\\RothTooltipDarkTexture"
 local ROTH_FRAME = "Interface\\AddOns\\RothTooltip\\texture\\RothTooltipDarkFrame"
 
-local StyleByTooltip = addon.__RT_StyleByTooltip or setmetatable({}, { __mode = "k" })
-local FactionIconByTooltip = addon.__RT_FactionIconByTooltip or setmetatable({}, { __mode = "k" })
-local HookedTooltips = addon.__RT_StyleHookedTooltips or setmetatable({}, { __mode = "k" })
+local StyleByTooltip = setmetatable({}, { __mode = "k" })
+local FactionIconByTooltip = setmetatable({}, { __mode = "k" })
+local HookStateByTooltip = setmetatable({}, { __mode = "k" })
+local VisualsHiddenByTooltip = setmetatable({}, { __mode = "k" })
 
-addon.__RT_StyleByTooltip = StyleByTooltip
-addon.__RT_FactionIconByTooltip = FactionIconByTooltip
-addon.__RT_StyleHookedTooltips = HookedTooltips
-
--- Reverse map TooltipDataType id -> name. Rebuild once per load so removed enum
--- members cannot survive in a stale table.
 addon.TYPE_NAME = {}
 if Enum and type(Enum.TooltipDataType) == "table" then
     for name, typeID in pairs(Enum.TooltipDataType) do
-        if type(name) == "string" and type(typeID) == "number" then
-            addon.TYPE_NAME[typeID] = name
-        end
+        if type(name) == "string" and type(typeID) == "number" then addon.TYPE_NAME[typeID] = name end
     end
 end
 
-local function IsAccessible(object)
+local function Accessible(object)
     return addon:IsObjectAccessible(object)
 end
 
-local function HideObject(object)
-    if IsAccessible(object) then addon:SafeMethod(object, "Hide") end
+local function Hide(object)
+    if Accessible(object) then addon:SafeMethod(object, "Hide") end
 end
 
-local function SetPointsToParent(frame, parent)
-    if not IsAccessible(frame) or not IsAccessible(parent) then return false end
-    addon:SafeMethod(frame, "ClearAllPoints")
-    addon:SafeMethod(frame, "SetAllPoints", parent)
+local function CanCreateVisual(parent)
+    if InCombatLockdown() or not addon:IsTooltipSafe(parent) then return false end
+    local aspect = Enum and Enum.ForbiddenAspect and Enum.ForbiddenAspect.ChangeParent
+    if type(aspect) == "number" and addon:HasForbiddenAspects(parent, aspect) then return false end
     return true
 end
 
 function addon:GetTooltipStyle(tooltip)
     if not self:IsTooltipSafe(tooltip) then return nil end
     local style = StyleByTooltip[tooltip]
-    if IsAccessible(style) then return style end
+    if Accessible(style) then return style end
     StyleByTooltip[tooltip] = nil
-    return nil
 end
 
 function addon:GetBigFactionIcon(tooltip, create)
     if not self:IsTooltipSafe(tooltip) then return nil end
-
     local icon = FactionIconByTooltip[tooltip]
-    if IsAccessible(icon) then return icon end
+    if Accessible(icon) then return icon end
     FactionIconByTooltip[tooltip] = nil
-    if create ~= true then return nil end
+    if create ~= true or not CanCreateVisual(tooltip) then return nil end
 
     local identity = self:SafeGet(tooltip, "identity")
     if tooltip ~= GameTooltip and identity ~= "diy" then return nil end
-
     icon = self:SafeMethod(tooltip, "CreateTexture", nil, "OVERLAY")
-    if not IsAccessible(icon) then return nil end
+    if not Accessible(icon) then return nil end
 
     self:SafeMethod(icon, "SetPoint", "TOPRIGHT", tooltip, "TOPRIGHT", 18, 0)
     self:SafeMethod(icon, "SetBlendMode", "ADD")
@@ -81,11 +71,21 @@ end
 
 function addon:NormalizeTooltipFrame(tooltip)
     local style = self:GetTooltipStyle(tooltip)
-    if style then SetPointsToParent(style, tooltip) end
+    if not style then return end
+    self:SafeMethod(style, "ClearAllPoints")
+    self:SafeMethod(style, "SetAllPoints", tooltip)
 end
 
 function addon:ResetTooltipStyleFrame(tooltip)
     self:NormalizeTooltipFrame(tooltip)
+end
+
+function addon:ReleaseTooltipStyle(tooltip)
+    VisualsHiddenByTooltip[tooltip] = nil
+    local style = StyleByTooltip[tooltip]
+    if Accessible(style) then self:SafeMethod(style, "Hide") end
+    local icon = FactionIconByTooltip[tooltip]
+    if Accessible(icon) then self:SafeMethod(icon, "Hide") end
 end
 
 local KNOWN_VISUAL_MEMBERS = {
@@ -99,86 +99,66 @@ local NESTED_VISUAL_MEMBERS = {
     "Tooltip", "ItemTooltip", "FollowerTooltip", "BackdropFrame", "Backdrop",
 }
 
-local function HideKnownVisualMembers(frame)
-    if not IsAccessible(frame) then return end
-    for _, member in ipairs(KNOWN_VISUAL_MEMBERS) do
-        HideObject(addon:SafeGet(frame, member))
-    end
+local function HideKnownMembers(frame)
+    if not Accessible(frame) then return end
+    for _, member in ipairs(KNOWN_VISUAL_MEMBERS) do Hide(addon:SafeGet(frame, member)) end
 end
 
-local function HideBlizzardTooltipVisuals(tooltip)
-    if not addon:IsTooltipSafe(tooltip) then return end
-
-    HideKnownVisualMembers(tooltip)
-    for _, member in ipairs(NESTED_VISUAL_MEMBERS) do
-        HideKnownVisualMembers(addon:SafeGet(tooltip, member))
-    end
+local function HideBlizzardVisuals(tooltip)
+    if VisualsHiddenByTooltip[tooltip] or not addon:IsManagedTooltip(tooltip) then return end
+    HideKnownMembers(tooltip)
+    for _, member in ipairs(NESTED_VISUAL_MEMBERS) do HideKnownMembers(addon:SafeGet(tooltip, member)) end
 
     local getBackdropTexture = addon:SafeGet(tooltip, "GetBackdropTexture")
     if type(getBackdropTexture) == "function" then
-        local ok, background = pcall(getBackdropTexture, tooltip, "bg")
-        if ok and addon:CanAccessValue(background) then HideObject(background) end
-        ok, background = pcall(getBackdropTexture, tooltip, "border")
-        if ok and addon:CanAccessValue(background) then HideObject(background) end
+        local background = addon:SafeCall("GetBackdropTexture:bg", getBackdropTexture, tooltip, "bg")
+        Hide(background)
+        local border = addon:SafeCall("GetBackdropTexture:border", getBackdropTexture, tooltip, "border")
+        Hide(border)
     end
 
-    -- Do not enumerate GetRegions(): Retail 12.1 may propagate secret aspect
-    -- through returned regions. Known Blizzard members plus the background draw
-    -- layer are sufficient and fail closed for unknown tooltip implementations.
     addon:SafeMethod(tooltip, "DisableDrawLayer", "BACKGROUND")
+    VisualsHiddenByTooltip[tooltip] = true
 end
 
-local function CreateBorderTextures(parent, drawLayer)
-    if not IsAccessible(parent) then return nil end
-
-    local border = {}
-    border.top = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER")
-    border.bottom = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER")
-    border.left = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER")
-    border.right = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER")
-
-    if not IsAccessible(border.top) or not IsAccessible(border.bottom)
-        or not IsAccessible(border.left) or not IsAccessible(border.right) then
-        return nil
-    end
-
+local function CreateBorder(parent, drawLayer)
+    if not Accessible(parent) then return nil end
+    local border = {
+        top = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER"),
+        bottom = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER"),
+        left = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER"),
+        right = addon:SafeMethod(parent, "CreateTexture", nil, drawLayer or "BORDER"),
+    }
     for _, texture in pairs(border) do
+        if not Accessible(texture) then return nil end
         addon:SafeMethod(texture, "SetTexture", WHITE_TEXTURE)
     end
     return border
 end
 
 local function LayoutBorder(parent, border, size)
-    if not IsAccessible(parent) or type(border) ~= "table" then return end
-    size = tonumber(size) or 1
-    if size < 1 then size = 1 end
-
+    if not Accessible(parent) or type(border) ~= "table" then return end
+    size = math.max(1, tonumber(size) or 1)
     for _, texture in pairs(border) do addon:SafeMethod(texture, "ClearAllPoints") end
 
-    addon:SafeMethod(border.top, "SetPoint", "TOPLEFT", parent, "TOPLEFT", 0, 0)
-    addon:SafeMethod(border.top, "SetPoint", "TOPRIGHT", parent, "TOPRIGHT", 0, 0)
+    addon:SafeMethod(border.top, "SetPoint", "TOPLEFT", parent, "TOPLEFT")
+    addon:SafeMethod(border.top, "SetPoint", "TOPRIGHT", parent, "TOPRIGHT")
     addon:SafeMethod(border.top, "SetHeight", size)
-
-    addon:SafeMethod(border.bottom, "SetPoint", "BOTTOMLEFT", parent, "BOTTOMLEFT", 0, 0)
-    addon:SafeMethod(border.bottom, "SetPoint", "BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
+    addon:SafeMethod(border.bottom, "SetPoint", "BOTTOMLEFT", parent, "BOTTOMLEFT")
+    addon:SafeMethod(border.bottom, "SetPoint", "BOTTOMRIGHT", parent, "BOTTOMRIGHT")
     addon:SafeMethod(border.bottom, "SetHeight", size)
-
-    addon:SafeMethod(border.left, "SetPoint", "TOPLEFT", parent, "TOPLEFT", 0, 0)
-    addon:SafeMethod(border.left, "SetPoint", "BOTTOMLEFT", parent, "BOTTOMLEFT", 0, 0)
+    addon:SafeMethod(border.left, "SetPoint", "TOPLEFT", parent, "TOPLEFT")
+    addon:SafeMethod(border.left, "SetPoint", "BOTTOMLEFT", parent, "BOTTOMLEFT")
     addon:SafeMethod(border.left, "SetWidth", size)
-
-    addon:SafeMethod(border.right, "SetPoint", "TOPRIGHT", parent, "TOPRIGHT", 0, 0)
-    addon:SafeMethod(border.right, "SetPoint", "BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
+    addon:SafeMethod(border.right, "SetPoint", "TOPRIGHT", parent, "TOPRIGHT")
+    addon:SafeMethod(border.right, "SetPoint", "BOTTOMRIGHT", parent, "BOTTOMRIGHT")
     addon:SafeMethod(border.right, "SetWidth", size)
 end
 
 local function SetBorderColor(border, red, green, blue, alpha)
     if type(border) ~= "table" then return end
-    red = tonumber(red) or 1
-    green = tonumber(green) or 1
-    blue = tonumber(blue) or 1
-    alpha = tonumber(alpha) or 1
-
+    red, green, blue, alpha = tonumber(red) or 1, tonumber(green) or 1,
+        tonumber(blue) or 1, tonumber(alpha) or 1
     for _, texture in pairs(border) do
         addon:SafeMethod(texture, "SetVertexColor", red, green, blue, alpha)
     end
@@ -187,19 +167,14 @@ end
 local function SetBorderTexture(border, texture)
     if type(border) ~= "table" or type(texture) ~= "string" then return end
     for _, region in pairs(border) do addon:SafeMethod(region, "SetTexture", texture) end
-
     addon:SafeMethod(border.top, "SetHorizTile", true)
-    addon:SafeMethod(border.top, "SetVertTile", false)
     addon:SafeMethod(border.bottom, "SetHorizTile", true)
-    addon:SafeMethod(border.bottom, "SetVertTile", false)
-    addon:SafeMethod(border.left, "SetHorizTile", false)
     addon:SafeMethod(border.left, "SetVertTile", true)
-    addon:SafeMethod(border.right, "SetHorizTile", false)
     addon:SafeMethod(border.right, "SetVertTile", true)
 end
 
-local function PositionInsetFrame(frame, parent, inset)
-    if not IsAccessible(frame) or not IsAccessible(parent) then return end
+local function PositionInset(frame, parent, inset)
+    if not Accessible(frame) or not Accessible(parent) then return end
     inset = tonumber(inset) or 1
     addon:SafeMethod(frame, "ClearAllPoints")
     addon:SafeMethod(frame, "SetPoint", "TOPLEFT", parent, "TOPLEFT", inset, -inset)
@@ -207,7 +182,7 @@ local function PositionInsetFrame(frame, parent, inset)
 end
 
 local function PositionMask(style, inset)
-    if not style or not IsAccessible(style.mask) then return end
+    if not style or not Accessible(style.mask) then return end
     inset = tonumber(inset) or 3
     addon:SafeMethod(style.mask, "ClearAllPoints")
     addon:SafeMethod(style.mask, "SetPoint", "TOPLEFT", style, "TOPLEFT", inset, -inset)
@@ -234,7 +209,7 @@ local function InstallStyleMethods(style)
         if type(blue) == "number" then color[3] = blue end
         if type(alpha) == "number" then color[4] = alpha end
 
-        if self.useRothBackground == true then
+        if self.useRothBackground then
             addon:SafeMethod(self.bg, "Hide")
             addon:SafeMethod(self.rothBg, "Show")
             addon:SafeMethod(self.rothBg, "SetVertexColor", unpack(color))
@@ -259,33 +234,30 @@ local function InstallStyleMethods(style)
         backdrop = self.backdrop
         if type(backdrop) ~= "table" then return end
 
-        local edgeSize = tonumber(backdrop.edgeSize) or 1
-        LayoutBorder(self, self.border, edgeSize)
+        LayoutBorder(self, self.border, backdrop.edgeSize)
         LayoutBorder(self.inside, self.inside and self.inside.border, 1)
         LayoutBorder(self.outside, self.outside and self.outside.border, 1)
         SetBorderTexture(self.border, type(backdrop.edgeFile) == "string" and backdrop.edgeFile or WHITE_TEXTURE)
 
-        if self.useRothBackground == true then
+        if self.useRothBackground then
             addon:SafeMethod(self.bg, "Hide")
             addon:SafeMethod(self.rothBg, "Show")
         else
             addon:SafeMethod(self.rothBg, "Hide")
-            addon:SafeMethod(self.bg, "SetTexture", type(backdrop.bgFile) == "string" and backdrop.bgFile or WHITE_TEXTURE)
+            addon:SafeMethod(self.bg, "SetTexture",
+                type(backdrop.bgFile) == "string" and backdrop.bgFile or WHITE_TEXTURE)
             addon:SafeMethod(self.bg, "Show")
         end
-
         self:SetBackdropColor(unpack(self.backgroundColor))
         self:SetBackdropBorderColor(unpack(self.borderColor))
     end
 end
 
-local function CreateStyleFrame(tooltip)
-    if not addon:IsTooltipSafe(tooltip) then return nil end
-
+local function CreateStyle(tooltip)
+    if not CanCreateVisual(tooltip) then return nil end
     local ok, style = pcall(CreateFrame, "Frame", nil, tooltip)
-    if not ok or not IsAccessible(style) then return nil end
+    if not ok or not Accessible(style) then return nil end
 
-    StyleByTooltip[tooltip] = style
     style.backdrop = {
         bgFile = DEFAULT_BACKGROUND,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
@@ -295,126 +267,114 @@ local function CreateStyleFrame(tooltip)
     style.backgroundColor = { 0, 0, 0, 0.9 }
     style.borderColor = { 0.6, 0.6, 0.6, 0.8 }
     style.lastBackgroundColor = { 0, 0, 0, 0.9 }
-    style.useRothBackground = false
-    style.hideFlatBorder = false
+    StyleByTooltip[tooltip] = style
 
-    local frameLevel = addon:SafeMethod(tooltip, "GetFrameLevel")
-    if type(frameLevel) == "number" then addon:SafeMethod(style, "SetFrameLevel", frameLevel) end
-    SetPointsToParent(style, tooltip)
+    local level = addon:SafeMethod(tooltip, "GetFrameLevel")
+    if type(level) == "number" then addon:SafeMethod(style, "SetFrameLevel", level) end
+    addon:SafeMethod(style, "SetAllPoints", tooltip)
 
     style.bg = addon:SafeMethod(style, "CreateTexture", nil, "BACKGROUND")
-    if IsAccessible(style.bg) then
-        addon:SafeMethod(style.bg, "SetAllPoints", style)
-        addon:SafeMethod(style.bg, "SetTexture", WHITE_TEXTURE)
-    end
-
     style.rothBg = addon:SafeMethod(style, "CreateTexture", nil, "BACKGROUND")
-    if IsAccessible(style.rothBg) then
+    style.rothFrame = addon:SafeMethod(style, "CreateTexture", nil, "BORDER")
+    if Accessible(style.bg) then addon:SafeMethod(style.bg, "SetAllPoints", style) end
+    if Accessible(style.rothBg) then
         addon:SafeMethod(style.rothBg, "SetTexture", ROTH_BACKGROUND)
         addon:SafeMethod(style.rothBg, "SetAllPoints", style)
         addon:SafeMethod(style.rothBg, "SetTexCoord", 0.0875, 0.9065, 0.0898, 0.9015)
         addon:SafeMethod(style.rothBg, "Hide")
     end
-
-    style.rothFrame = addon:SafeMethod(style, "CreateTexture", nil, "BORDER")
-    if IsAccessible(style.rothFrame) then
+    if Accessible(style.rothFrame) then
         addon:SafeMethod(style.rothFrame, "SetTexture", ROTH_FRAME)
         addon:SafeMethod(style.rothFrame, "SetAllPoints", style)
         addon:SafeMethod(style.rothFrame, "Hide")
     end
 
-    style.border = CreateBorderTextures(style, "BORDER")
-
+    style.border = CreateBorder(style, "BORDER")
     local insideOK, inside = pcall(CreateFrame, "Frame", nil, style)
     style.inside = insideOK and inside or nil
-    if IsAccessible(style.inside) then
-        PositionInsetFrame(style.inside, style, 1)
-        style.inside.border = CreateBorderTextures(style.inside, "OVERLAY")
+    if Accessible(style.inside) then
+        PositionInset(style.inside, style, 1)
+        style.inside.border = CreateBorder(style.inside, "OVERLAY")
         SetBorderColor(style.inside.border, 0.1, 0.1, 0.1, 0.8)
         addon:SafeMethod(style.inside, "Hide")
     end
 
     local outsideOK, outside = pcall(CreateFrame, "Frame", nil, style)
     style.outside = outsideOK and outside or nil
-    if IsAccessible(style.outside) then
+    if Accessible(style.outside) then
         addon:SafeMethod(style.outside, "SetPoint", "TOPLEFT", style, "TOPLEFT", -1, 1)
         addon:SafeMethod(style.outside, "SetPoint", "BOTTOMRIGHT", style, "BOTTOMRIGHT", 1, -1)
-        style.outside.border = CreateBorderTextures(style.outside, "OVERLAY")
+        style.outside.border = CreateBorder(style.outside, "OVERLAY")
         SetBorderColor(style.outside.border, 0, 0, 0, 0.5)
         addon:SafeMethod(style.outside, "Hide")
     end
 
     style.mask = addon:SafeMethod(style, "CreateTexture", nil, "OVERLAY")
-    if IsAccessible(style.mask) then
+    if Accessible(style.mask) then
         addon:SafeMethod(style.mask, "SetTexture", "Interface\\Tooltips\\UI-Tooltip-Background")
         PositionMask(style, 3)
         addon:SafeMethod(style.mask, "SetBlendMode", "ADD")
-        local lower = CreateColor and CreateColor(0, 0, 0, 0) or nil
-        local upper = CreateColor and CreateColor(0.9, 0.9, 0.9, 0.4) or nil
-        if lower and upper then addon:SafeMethod(style.mask, "SetGradient", "VERTICAL", lower, upper) end
+        if type(CreateColor) == "function" then
+            addon:SafeMethod(style.mask, "SetGradient", "VERTICAL",
+                CreateColor(0, 0, 0, 0), CreateColor(0.9, 0.9, 0.9, 0.4))
+        end
         addon:SafeMethod(style.mask, "Hide")
     end
 
     InstallStyleMethods(style)
     style:SetBackdrop(style.backdrop)
-    style:SetBackdropColor(unpack(style.backgroundColor))
-    style:SetBackdropBorderColor(unpack(style.borderColor))
-    addon:GetBigFactionIcon(tooltip, true)
+    addon:SafeMethod(style, "Show")
     return style
 end
 
-local function HookScriptIfSupported(frame, scriptName, callback)
-    if not IsAccessible(frame) or type(scriptName) ~= "string" or type(callback) ~= "function" then
-        return false
-    end
-    if type(addon.CanBindScripts) == "function" and not addon:CanBindScripts(frame) then
-        return false
-    end
-
-    local hasScript = addon:SafeGet(frame, "HasScript")
+local function HookOne(tooltip, state, scriptName, callback)
+    if state[scriptName] or not addon:CanBindScripts(tooltip) then return end
+    local hasScript = addon:SafeGet(tooltip, "HasScript")
     if type(hasScript) == "function" then
-        local ok, supported = pcall(hasScript, frame, scriptName)
-        if not ok or not addon:CanAccessValue(supported) or supported ~= true then return false end
+        local ok, supported = pcall(hasScript, tooltip, scriptName)
+        if not ok or not addon:CanAccessValue(supported) or supported ~= true then return end
     end
-
-    local hookScript = addon:SafeGet(frame, "HookScript")
-    if type(hookScript) ~= "function" then return false end
-    local ok = pcall(hookScript, frame, scriptName, callback)
-    return ok
+    local hook = addon:SafeGet(tooltip, "HookScript")
+    if type(hook) == "function" and pcall(hook, tooltip, scriptName, callback) then
+        state[scriptName] = true
+    end
 end
 
 local function InstallTooltipHooks(tooltip)
-    if HookedTooltips[tooltip] or not addon:IsTooltipSafe(tooltip) then return end
-    HookedTooltips[tooltip] = true
+    if not addon:IsManagedTooltip(tooltip) then return end
+    local state = HookStateByTooltip[tooltip] or {}
+    HookStateByTooltip[tooltip] = state
 
-    HookScriptIfSupported(tooltip, "OnShow", function(frame)
+    HookOne(tooltip, state, "OnShow", function(frame)
+        VisualsHiddenByTooltip[frame] = nil
         LibEvent:trigger("tooltip:show", frame)
     end)
-    HookScriptIfSupported(tooltip, "OnHide", function(frame)
+    HookOne(tooltip, state, "OnHide", function(frame)
         LibEvent:trigger("tooltip:hide", frame)
     end)
-    HookScriptIfSupported(tooltip, "OnTooltipCleared", function(frame)
+    HookOne(tooltip, state, "OnTooltipCleared", function(frame)
         addon:ResetTooltipStyleFrame(frame)
         LibEvent:trigger("tooltip:cleared", frame)
     end)
 end
 
 local function EnsureStyle(tooltip)
-    if not addon:IsTooltipSafe(tooltip) then return nil end
-    local style = addon:GetTooltipStyle(tooltip) or CreateStyleFrame(tooltip)
+    if not addon:IsManagedTooltip(tooltip) then return nil end
+    local style = addon:GetTooltipStyle(tooltip) or CreateStyle(tooltip)
     if not style then return nil end
 
+    addon:SafeMethod(style, "Show")
     InstallTooltipHooks(tooltip)
-    HideBlizzardTooltipVisuals(tooltip)
+    HideBlizzardVisuals(tooltip)
     return style
 end
 
-LibEvent:attachTrigger("tooltip:init", function(_, tooltip)
+LibEvent:attachTrigger("tooltip:init, tooltip.style.init", function(_, tooltip)
     EnsureStyle(tooltip)
 end)
 
-LibEvent:attachTrigger("tooltip.style.init", function(_, tooltip)
-    EnsureStyle(tooltip)
+LibEvent:attachTrigger("tooltip:unregister", function(_, tooltip)
+    addon:ReleaseTooltipStyle(tooltip)
 end)
 
 LibEvent:attachTrigger("tooltip:cleared", function(_, tooltip)
@@ -423,37 +383,26 @@ end)
 
 LibEvent:attachTrigger("tooltip.style.mask", function(_, tooltip, enabled)
     local style = EnsureStyle(tooltip)
-    if style and IsAccessible(style.mask) then addon:SafeMethod(style.mask, "SetShown", enabled == true) end
+    if style and Accessible(style.mask) then addon:SafeMethod(style.mask, "SetShown", enabled == true) end
 end)
 
 LibEvent:attachTrigger("tooltip.style.background", function(_, tooltip, red, green, blue, alpha)
     local style = EnsureStyle(tooltip)
     if not style then return end
-
     local currentRed, currentGreen, currentBlue = style:GetBackdropColor()
-    red = type(red) == "number" and red or currentRed
-    green = type(green) == "number" and green or currentGreen
-    blue = type(blue) == "number" and blue or currentBlue
-    alpha = type(alpha) == "number" and alpha or 0.9
-    style.lastBackgroundColor[1] = red
-    style.lastBackgroundColor[2] = green
-    style.lastBackgroundColor[3] = blue
-    style.lastBackgroundColor[4] = alpha
+    red, green, blue = tonumber(red) or currentRed, tonumber(green) or currentGreen, tonumber(blue) or currentBlue
+    alpha = tonumber(alpha) or 0.9
+    style.lastBackgroundColor = { red, green, blue, alpha }
     style:SetBackdropColor(red, green, blue, alpha)
 end)
 
-LibEvent:attachTrigger("tooltip.style.bgfile", function(_, tooltip, backgroundValue)
+LibEvent:attachTrigger("tooltip.style.bgfile", function(_, tooltip, value)
     local style = EnsureStyle(tooltip)
     if not style then return end
-
-    local useRoth = backgroundValue == "RothTooltipDarkTexture"
-    style.useRothBackground = useRoth
+    style.useRothBackground = value == "RothTooltipDarkTexture"
     local backdrop = style:GetBackdrop()
-    if type(backdrop) ~= "table" then return end
-
-    local backgroundFile = useRoth and WHITE_TEXTURE or addon:GetBgFile(backgroundValue)
-    if type(backgroundFile) ~= "string" then backgroundFile = DEFAULT_BACKGROUND end
-    backdrop.bgFile = backgroundFile
+    backdrop.bgFile = style.useRothBackground and WHITE_TEXTURE
+        or addon:GetBgFile(value) or DEFAULT_BACKGROUND
     style:SetBackdrop(backdrop)
     style:SetBackdropColor(unpack(style.lastBackgroundColor))
 end)
@@ -461,27 +410,21 @@ end)
 LibEvent:attachTrigger("tooltip.style.border.size", function(_, tooltip, size)
     local style = EnsureStyle(tooltip)
     if not style then return end
-
-    size = tonumber(size) or 1
-    if size < 1 then size = 1 elseif size > 8 then size = 8 end
-
+    size = math.max(1, math.min(8, tonumber(size) or 1))
     local backdrop = style:GetBackdrop()
-    if type(backdrop) ~= "table" then return end
     backdrop.edgeSize = size
     if type(backdrop.insets) == "table" then
-        backdrop.insets.top = size
-        backdrop.insets.left = size
-        backdrop.insets.right = size
-        backdrop.insets.bottom = size
+        backdrop.insets.top, backdrop.insets.left = size, size
+        backdrop.insets.right, backdrop.insets.bottom = size, size
     end
     style:SetBackdrop(backdrop)
-    PositionInsetFrame(style.inside, style, size)
+    PositionInset(style.inside, style, size)
 end)
 
-local function ResolveBorderFile(corner)
-    if type(corner) == "string" and LibMedia and LibMedia:IsValid("border", corner) then
-        local ok, border = pcall(LibMedia.Fetch, LibMedia, "border", corner)
-        if ok and type(border) == "string" then return border end
+local function ResolveBorder(value)
+    if type(value) == "string" and LibMedia and LibMedia:IsValid("border", value) then
+        local ok, resolved = pcall(LibMedia.Fetch, LibMedia, "border", value)
+        if ok and type(resolved) == "string" then return resolved end
     end
     return WHITE_TEXTURE
 end
@@ -489,22 +432,10 @@ end
 LibEvent:attachTrigger("tooltip.style.border.corner", function(_, tooltip, corner)
     local style = EnsureStyle(tooltip)
     if not style then return end
-
     local backdrop = style:GetBackdrop()
-    if type(backdrop) ~= "table" then return end
-    local size = tonumber(backdrop.edgeSize)
-        or tonumber(addon.db and addon.db.general and addon.db.general.borderSize)
-        or 1
-    if size < 1 then size = 1 end
-    if corner == "angular" and size > 6 then size = 6 end
+    local size = math.max(1, tonumber(backdrop.edgeSize) or 1)
+    if corner == "angular" then size = math.min(size, 6) end
     backdrop.edgeSize = size
-
-    if type(backdrop.insets) == "table" then
-        backdrop.insets.top = size
-        backdrop.insets.left = size
-        backdrop.insets.right = size
-        backdrop.insets.bottom = size
-    end
 
     style.hideFlatBorder = false
     addon:SafeMethod(style.rothFrame, "Hide")
@@ -519,48 +450,33 @@ LibEvent:attachTrigger("tooltip.style.border.corner", function(_, tooltip, corne
     elseif corner == "angular" then
         backdrop.edgeFile = WHITE_TEXTURE
         PositionMask(style, 1)
-        addon:SafeMethod(style.outside, "Show")
-        PositionInsetFrame(style.inside, style, size)
+        PositionInset(style.inside, style, size)
         addon:SafeMethod(style.inside, "Show")
+        addon:SafeMethod(style.outside, "Show")
     else
-        backdrop.edgeFile = ResolveBorderFile(corner)
+        backdrop.edgeFile = ResolveBorder(corner)
     end
 
     style:SetBackdrop(backdrop)
-    if style.hideFlatBorder then
-        SetBorderColor(style.border, 0, 0, 0, 0)
-    else
-        SetBorderColor(style.border, unpack(style.borderColor))
-    end
+    if style.hideFlatBorder then SetBorderColor(style.border, 0, 0, 0, 0)
+    else SetBorderColor(style.border, unpack(style.borderColor)) end
 end)
 
 LibEvent:attachTrigger("tooltip.style.border.color", function(_, tooltip, red, green, blue, alpha)
     local style = EnsureStyle(tooltip)
     if not style then return end
-    if style.hideFlatBorder then
-        SetBorderColor(style.border, 0, 0, 0, 0)
-        return
-    end
-
+    if style.hideFlatBorder then SetBorderColor(style.border, 0, 0, 0, 0) return end
     local currentRed, currentGreen, currentBlue, currentAlpha = style:GetBackdropBorderColor()
-    style:SetBackdropBorderColor(
-        type(red) == "number" and red or currentRed,
-        type(green) == "number" and green or currentGreen,
-        type(blue) == "number" and blue or currentBlue,
-        type(alpha) == "number" and alpha or currentAlpha
-    )
+    style:SetBackdropBorderColor(tonumber(red) or currentRed, tonumber(green) or currentGreen,
+        tonumber(blue) or currentBlue, tonumber(alpha) or currentAlpha)
 end)
 
-local function GetFontDefaults(fontObject)
-    if not IsAccessible(fontObject) then return nil, nil, nil end
-    return addon:SafeMethod(fontObject, "GetFont")
-end
-
-local defaultHeaderFont, defaultHeaderSize, defaultHeaderFlag = GetFontDefaults(GameTooltipHeaderText)
-local defaultBodyFont, defaultBodySize, defaultBodyFlag = GetFontDefaults(GameTooltipText)
+local defaultHeaderFont, defaultHeaderSize, defaultHeaderFlag =
+    addon:SafeMethod(GameTooltipHeaderText, "GetFont")
+local defaultBodyFont, defaultBodySize, defaultBodyFlag = addon:SafeMethod(GameTooltipText, "GetFont")
 
 LibEvent:attachTrigger("tooltip.style.font.header", function(_, _, fontObject, fontSize, fontFlag)
-    if not IsAccessible(GameTooltipHeaderText) then return end
+    if not Accessible(GameTooltipHeaderText) then return end
     local currentFont, currentSize, currentFlag = addon:SafeMethod(GameTooltipHeaderText, "GetFont")
     local font = addon:GetFont(fontObject, defaultHeaderFont or currentFont)
     local size = fontSize == "default" and defaultHeaderSize or tonumber(fontSize) or currentSize
@@ -572,7 +488,7 @@ LibEvent:attachTrigger("tooltip.style.font.header", function(_, _, fontObject, f
 end)
 
 LibEvent:attachTrigger("tooltip.style.font.body", function(_, _, fontObject, fontSize, fontFlag)
-    if not IsAccessible(GameTooltipText) then return end
+    if not Accessible(GameTooltipText) then return end
     local currentFont, currentSize, currentFlag = addon:SafeMethod(GameTooltipText, "GetFont")
     local font = addon:GetFont(fontObject, defaultBodyFont or currentFont)
     local size = fontSize == "default" and defaultBodySize or tonumber(fontSize) or currentSize
@@ -586,7 +502,6 @@ end)
 function addon:ApplyGeneralStyleToTooltip(tooltip)
     local style = EnsureStyle(tooltip)
     if not style then return false end
-
     local general = self.db and self.db.general
     if type(general) ~= "table" then return true end
 
@@ -602,4 +517,19 @@ function addon:ApplyGeneralStyleToTooltip(tooltip)
         LibEvent:trigger("tooltip.style.background", tooltip, unpack(general.background))
     end
     return true
+end
+
+local function OnBackdropChanged(tooltip)
+    if not addon:IsManagedTooltip(tooltip) then return end
+    VisualsHiddenByTooltip[tooltip] = nil
+    addon:ApplyGeneralStyleToTooltip(tooltip)
+end
+
+if type(hooksecurefunc) == "function" then
+    if type(SharedTooltip_SetBackdropStyle) == "function" then
+        hooksecurefunc("SharedTooltip_SetBackdropStyle", OnBackdropChanged)
+    end
+    if type(GameTooltip_SetBackdropStyle) == "function" then
+        hooksecurefunc("GameTooltip_SetBackdropStyle", OnBackdropChanged)
+    end
 end
