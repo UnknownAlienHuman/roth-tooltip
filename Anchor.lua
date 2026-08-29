@@ -1,113 +1,96 @@
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 
-local CURSOR_ANCHOR_INTERVAL = 0.05
-local anchorStates = setmetatable({}, { __mode = "k" })
-
-local function CanAccess(value)
-    return not addon.CanAccessValue or addon:CanAccessValue(value)
-end
+local CURSOR_INTERVAL = 0.05
+local states = setmetatable({}, { __mode = "k" })
+local defaultAnchorHookInstalled = false
 
 local function IsOrdinaryUnit(unit)
-    if not CanAccess(unit) or type(unit) ~= "string" or unit == "" then return false end
-    if addon.IsUnitIdentityRestricted and addon:IsUnitIdentityRestricted(unit) then return false end
-    return true
+    return addon:CanAccessValue(unit)
+        and type(unit) == "string"
+        and unit ~= ""
+        and not addon:IsUnitIdentityRestricted(unit)
 end
 
-local function CancelTicker(ticker)
-    if not CanAccess(ticker) or ticker == nil then return end
-    local cancel = addon:SafeGet(ticker, "Cancel")
-    if type(cancel) == "function" then pcall(cancel, ticker) end
-end
-
-local function StopAnchorTicker(tip)
-    if not CanAccess(tip) or tip == nil then return end
-    local state = anchorStates[tip]
-    if state then CancelTicker(state.ticker) end
-    anchorStates[tip] = nil
-end
-
-local function SetCursorAnchorPoint(tip, point, offsetX, offsetY, scale)
-    if not addon:IsTooltipSafe(tip) then return false end
-    if type(scale) ~= "number" or scale <= 0 then return false end
-
-    local cursorX, cursorY = GetCursorPosition()
-    if not CanAccess(cursorX) or not CanAccess(cursorY)
-        or type(cursorX) ~= "number" or type(cursorY) ~= "number" then
-        return false
+local function StopCursorAnchor(tooltip)
+    local state = states[tooltip]
+    if type(state) == "table" and state.ticker then
+        local cancel = addon:SafeGet(state.ticker, "Cancel")
+        if type(cancel) == "function" then pcall(cancel, state.ticker) end
     end
+    states[tooltip] = nil
+end
 
-    local anchorX = floor(cursorX / scale + offsetX)
-    local anchorY = floor(cursorY / scale + offsetY)
-    local state = anchorStates[tip]
-    if state and state.point == point and state.x == anchorX and state.y == anchorY then
+local function CursorPositionInUIParent()
+    local cursorX, cursorY = GetCursorPosition()
+    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
+    if type(cursorX) ~= "number" or type(cursorY) ~= "number"
+        or type(scale) ~= "number" or scale <= 0 then
+        return nil
+    end
+    return cursorX / scale, cursorY / scale
+end
+
+local function SetCursorPoint(tooltip, point, offsetX, offsetY)
+    if not addon:IsTooltipSafe(tooltip) then return false end
+    local cursorX, cursorY = CursorPositionInUIParent()
+    if not cursorX then return false end
+
+    local x = floor(cursorX + offsetX)
+    local y = floor(cursorY + offsetY)
+    local state = states[tooltip]
+    if type(state) == "table" and state.point == point and state.x == x and state.y == y then
         return true
     end
 
     state = state or {}
-    state.point = point
-    state.x = anchorX
-    state.y = anchorY
-    anchorStates[tip] = state
-
-    addon:SafeMethod(tip, "ClearAllPoints")
-    addon:SafeMethod(tip, "SetPoint", point, UIParent, "BOTTOMLEFT", anchorX, anchorY)
+    state.point, state.x, state.y = point, x, y
+    states[tooltip] = state
+    addon:SafeMethod(tooltip, "ClearAllPoints")
+    addon:SafeMethod(tooltip, "SetPoint", point, UIParent, "BOTTOMLEFT", x, y)
     return true
 end
 
-local function AnchorCursor(tip, point, offsetX, offsetY)
-    StopAnchorTicker(tip)
-    if not addon:IsTooltipSafe(tip) then return end
-
-    local scale = addon:SafeMethod(tip, "GetEffectiveScale")
-    if not CanAccess(scale) or type(scale) ~= "number" or scale <= 0 then return end
+local function AnchorToCursor(tooltip, point, offsetX, offsetY)
+    StopCursorAnchor(tooltip)
+    if not addon:IsTooltipSafe(tooltip) then return end
 
     point = type(point) == "string" and point or "BOTTOM"
-    offsetX = tonumber(offsetX) or 0
-    offsetY = tonumber(offsetY) or 20
-    if not SetCursorAnchorPoint(tip, point, offsetX, offsetY, scale) then return end
+    offsetX, offsetY = tonumber(offsetX) or 0, tonumber(offsetY) or 20
+    if not SetCursorPoint(tooltip, point, offsetX, offsetY) then return end
     if not C_Timer or type(C_Timer.NewTicker) ~= "function" then return end
 
-    local state = anchorStates[tip] or {}
-    state.ticker = C_Timer.NewTicker(CURSOR_ANCHOR_INTERVAL, function()
-        if not addon:IsTooltipSafe(tip)
-            or addon:SafeMethod(tip, "IsShown") ~= true
-            or addon:SafeMethod(tip, "GetAnchorType") ~= "ANCHOR_CURSOR" then
-            StopAnchorTicker(tip)
+    local state = states[tooltip] or {}
+    state.ticker = C_Timer.NewTicker(CURSOR_INTERVAL, function()
+        if not addon:IsTooltipSafe(tooltip)
+            or addon:SafeMethod(tooltip, "IsShown") ~= true
+            or addon:SafeMethod(tooltip, "GetAnchorType") ~= "ANCHOR_CURSOR" then
+            StopCursorAnchor(tooltip)
             return
         end
-        SetCursorAnchorPoint(tip, point, offsetX, offsetY, scale)
+        SetCursorPoint(tooltip, point, offsetX, offsetY)
     end)
-    anchorStates[tip] = state
+    states[tooltip] = state
 end
 
-local function GetQuadrant()
-    local cursorX, cursorY = GetCursorPosition()
+local function CursorQuadrant()
+    local cursorX, cursorY = CursorPositionInUIParent()
     local width, height = GetScreenWidth(), GetScreenHeight()
-    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
-    if not CanAccess(cursorX) or not CanAccess(cursorY) or not CanAccess(width)
-        or not CanAccess(height) or not CanAccess(scale) then
-        return "BOTTOMLEFT"
-    end
     if type(cursorX) ~= "number" or type(cursorY) ~= "number"
-        or type(width) ~= "number" or type(height) ~= "number"
-        or type(scale) ~= "number" or scale <= 0 then
+        or type(width) ~= "number" or type(height) ~= "number" then
         return "BOTTOMLEFT"
     end
 
-    cursorX = cursorX / scale
-    cursorY = cursorY / scale
     if cursorX > width / 2 then
         return cursorY > height / 2 and "TOPRIGHT" or "BOTTOMRIGHT"
     end
     return cursorY > height / 2 and "TOPLEFT" or "BOTTOMLEFT"
 end
 
-local function AnchorAuto(tip, offsetX, offsetY)
-    local quadrant = GetQuadrant()
+local function AnchorAuto(tooltip, offsetX, offsetY)
+    local quadrant = CursorQuadrant()
     local point = "BOTTOMLEFT"
-    offsetX = tonumber(offsetX) or 0
-    offsetY = tonumber(offsetY) or 20
+    offsetX, offsetY = tonumber(offsetX) or 0, tonumber(offsetY) or 20
 
     if quadrant == "TOPRIGHT" then
         point, offsetX, offsetY = "TOPRIGHT", offsetX - 10, offsetY - 10
@@ -118,61 +101,59 @@ local function AnchorAuto(tip, offsetX, offsetY)
     else
         point, offsetX, offsetY = "BOTTOMLEFT", offsetX + 10, offsetY + 10
     end
-    AnchorCursor(tip, point, offsetX, offsetY)
+    AnchorToCursor(tooltip, point, offsetX, offsetY)
 end
 
-local function AnchorDefaultPosition(tip, parent, anchor, finalPass)
-    StopAnchorTicker(tip)
+local function AnchorDefault(tooltip, parent, anchor, finalPass)
+    StopCursorAnchor(tooltip)
     if type(anchor) ~= "table" then return end
 
-    if finalPass then
-        LibEvent:trigger("tooltip.anchor.static", tip, parent, anchor.x, anchor.y)
-    elseif anchor.position == "inherit" then
+    if not finalPass and anchor.position == "inherit" then
         local general = addon.db and addon.db.general
-        AnchorDefaultPosition(tip, parent, general and general.anchor, true)
-    else
-        LibEvent:trigger("tooltip.anchor.static", tip, parent, anchor.x, anchor.y, anchor.p)
+        AnchorDefault(tooltip, parent, general and general.anchor, true)
+        return
     end
+    LibEvent:trigger("tooltip.anchor.static", tooltip, parent, anchor.x, anchor.y, anchor.p)
 end
 
-local function AnchorFrame(tip, parent, anchor, isUnitFrame, finalPass)
-    if type(anchor) ~= "table" or not addon:IsTooltipSafe(tip) then return end
-    StopAnchorTicker(tip)
+local function ApplyAnchor(tooltip, parent, anchor, isUnitFrame, finalPass)
+    if type(anchor) ~= "table" or not addon:IsTooltipSafe(tooltip) then return end
+    StopCursorAnchor(tooltip)
 
     if anchor.hiddenInCombat == true and InCombatLockdown() then
-        LibEvent:trigger("tooltip.anchor.none", tip, parent)
+        LibEvent:trigger("tooltip.anchor.none", tooltip, parent)
         return
     end
     if anchor.returnInCombat == true and InCombatLockdown() then
-        AnchorDefaultPosition(tip, parent, anchor, finalPass)
+        AnchorDefault(tooltip, parent, anchor, finalPass)
         return
     end
     if anchor.returnOnUnitFrame == true and isUnitFrame then
-        AnchorDefaultPosition(tip, parent, anchor, finalPass)
+        AnchorDefault(tooltip, parent, anchor, finalPass)
         return
     end
 
     local position = anchor.position
     if position == "cursorRight" then
-        LibEvent:trigger("tooltip.anchor.cursor.right", tip, parent)
+        LibEvent:trigger("tooltip.anchor.cursor.right", tooltip, parent)
     elseif position == "cursor" then
-        LibEvent:trigger("tooltip.anchor.cursor", tip, parent)
-        AnchorCursor(tip, anchor.cp, anchor.cx, anchor.cy)
+        LibEvent:trigger("tooltip.anchor.cursor", tooltip, parent)
+        AnchorToCursor(tooltip, anchor.cp, anchor.cx, anchor.cy)
     elseif position == "auto" then
-        LibEvent:trigger("tooltip.anchor.cursor", tip, parent)
-        AnchorAuto(tip, anchor.cx, anchor.cy)
+        LibEvent:trigger("tooltip.anchor.cursor", tooltip, parent)
+        AnchorAuto(tooltip, anchor.cx, anchor.cy)
     elseif position == "inherit" and not finalPass then
         local general = addon.db and addon.db.general
-        AnchorFrame(tip, parent, general and general.anchor, isUnitFrame, true)
-    elseif position == "static" then
-        LibEvent:trigger("tooltip.anchor.static", tip, parent, anchor.x, anchor.y, anchor.p)
+        ApplyAnchor(tooltip, parent, general and general.anchor, isUnitFrame, true)
+    elseif position == "static" or position == "default" then
+        LibEvent:trigger("tooltip.anchor.static", tooltip, parent, anchor.x, anchor.y, anchor.p)
     end
 end
 
-local function ResolveAnchorUnit(tip)
-    local context = addon:GetPrimaryTooltipContext(tip)
+local function ResolveAnchorUnit(tooltip)
+    local context = addon:GetPrimaryTooltipContext(tooltip)
     local unit = type(context) == "table" and context.unitToken or nil
-    if not IsOrdinaryUnit(unit) then unit = addon:GetTooltipUnit(tip) end
+    if not IsOrdinaryUnit(unit) then unit = addon:GetTooltipUnit(tooltip) end
 
     local focusUnit, _, unitOwner = addon:GetMouseFocusUnit()
     local isUnitFrame = addon:IsObjectAccessible(unitOwner)
@@ -181,50 +162,79 @@ local function ResolveAnchorUnit(tip)
     return unit, isUnitFrame
 end
 
+local function OnAnchor(_, tooltip, parent)
+    if tooltip ~= GameTooltip or not addon:IsTooltipSafe(tooltip) or type(addon.db) ~= "table" then return end
+    if not addon:IsObjectAccessible(parent) then parent = UIParent end
+
+    local unit, isUnitFrame = ResolveAnchorUnit(tooltip)
+    local unitConfig = addon.db.unit
+    local general = addon.db.general
+    local isPlayer = IsOrdinaryUnit(unit) and addon:SafeCallBoolean(UnitIsPlayer, unit) or nil
+    local exists = IsOrdinaryUnit(unit) and addon:SafeCallBoolean(UnitExists, unit) or nil
+
+    if isPlayer == true and type(unitConfig) == "table" and type(unitConfig.player) == "table" then
+        ApplyAnchor(tooltip, parent, unitConfig.player.anchor, isUnitFrame)
+    elseif exists == true and type(unitConfig) == "table" and type(unitConfig.npc) == "table" then
+        ApplyAnchor(tooltip, parent, unitConfig.npc.anchor, isUnitFrame)
+    elseif type(general) == "table" then
+        ApplyAnchor(tooltip, parent, general.anchor, isUnitFrame)
+    end
+end
+
+local function InstallDefaultAnchorHook()
+    if defaultAnchorHookInstalled or type(hooksecurefunc) ~= "function"
+        or type(GameTooltip_SetDefaultAnchor) ~= "function" then return end
+
+    hooksecurefunc("GameTooltip_SetDefaultAnchor", function(tooltip, parent)
+        if addon.MM:IsEnabled("Anchor") then
+            LibEvent:trigger("tooltip:anchor", tooltip, parent)
+        end
+    end)
+    defaultAnchorHookInstalled = true
+end
+
 local M = {}
 
 function M:Init()
-    self.cbAnchor = function(_, tip, parent)
-        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("Anchor") then return end
-        if not CanAccess(tip) or tip ~= GameTooltip or not addon:IsTooltipSafe(tip) then return end
-        if type(addon.db) ~= "table" then return end
-
-        if not addon:IsObjectAccessible(parent) then parent = UIParent end
-        local unit, isUnitFrame = ResolveAnchorUnit(tip)
-        local unitConfig = addon.db.unit
-        local general = addon.db.general
-
-        local isPlayer = IsOrdinaryUnit(unit) and addon:SafeCallBoolean(UnitIsPlayer, unit) or nil
-        local exists = IsOrdinaryUnit(unit) and addon:SafeCallBoolean(UnitExists, unit) or nil
-
-        if isPlayer == true and type(unitConfig) == "table" and type(unitConfig.player) == "table" then
-            AnchorFrame(tip, parent, unitConfig.player.anchor, isUnitFrame)
-        elseif exists == true and type(unitConfig) == "table" and type(unitConfig.npc) == "table" then
-            AnchorFrame(tip, parent, unitConfig.npc.anchor, isUnitFrame)
-        elseif type(general) == "table" then
-            AnchorFrame(tip, parent, general.anchor, isUnitFrame)
-        end
-    end
-
-    self.cbStopTicker = function(_, tip)
-        StopAnchorTicker(tip)
-    end
+    self.cbAnchor = OnAnchor
+    self.cbStop = function(_, tooltip) StopCursorAnchor(tooltip) end
 end
 
 function M:Enable()
-    if addon.MM and addon.MM.AttachTrigger then
-        addon.MM:AttachTrigger("Anchor", "tooltip:anchor", self.cbAnchor, "tooltip:anchor")
-        addon.MM:AttachTrigger("Anchor", "tooltip:cleared, tooltip:hide", self.cbStopTicker, "tooltip:cleared/hide")
-    end
+    InstallDefaultAnchorHook()
+    addon.MM:AttachTrigger("Anchor", "tooltip:anchor", self.cbAnchor, "tooltip:anchor")
+    addon.MM:AttachTrigger("Anchor", "tooltip:cleared, tooltip:hide", self.cbStop, "tooltip:clear")
+    addon.MM:AttachTrigger("Anchor", "tooltip.anchor.cursor", function(_, tooltip, parent)
+        if addon:IsTooltipSafe(tooltip) and addon:IsObjectAccessible(parent) then
+            addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_CURSOR")
+        end
+    end, "anchor-cursor")
+    addon.MM:AttachTrigger("Anchor", "tooltip.anchor.cursor.right", function(_, tooltip, parent, x, y)
+        if addon:IsTooltipSafe(tooltip) and addon:IsObjectAccessible(parent) then
+            addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_CURSOR_RIGHT",
+                tonumber(x) or 36, tonumber(y) or -12)
+        end
+    end, "anchor-cursor-right")
+    addon.MM:AttachTrigger("Anchor", "tooltip.anchor.static", function(_, tooltip, _, x, y, point)
+        if not addon:IsTooltipSafe(tooltip) then return end
+        point = type(point) == "string" and point or "BOTTOMRIGHT"
+        addon:SafeMethod(tooltip, "ClearAllPoints")
+        addon:SafeMethod(tooltip, "SetPoint", point, UIParent, point,
+            tonumber(x) or (-CONTAINER_OFFSET_X - 13), tonumber(y) or CONTAINER_OFFSET_Y)
+    end, "anchor-static")
+    addon.MM:AttachTrigger("Anchor", "tooltip.anchor.none", function(_, tooltip, parent)
+        if addon:IsTooltipSafe(tooltip) and addon:IsObjectAccessible(parent) then
+            addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_NONE")
+            addon:SafeMethod(tooltip, "Hide")
+        end
+    end, "anchor-none")
 end
 
 function M:Disable()
-    StopAnchorTicker(GameTooltip)
+    StopCursorAnchor(GameTooltip)
 end
 
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
 
-if addon.MM and addon.MM.RegisterModule then
-    addon.MM:RegisterModule("Anchor", M)
-end
+addon.MM:RegisterModule("Anchor", M)

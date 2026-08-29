@@ -1,27 +1,19 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 
--- Extra tooltip-like frames are registered by global name because many are
--- created lazily by load-on-demand Blizzard modules. Missing globals are not
--- errors; each frame is validated again by addon:RegisterTooltipFrame().
+-- These frames are created by load-on-demand Blizzard modules or selected
+-- third-party addons. Missing globals are expected; only relevant ADDON_LOADED
+-- events resynchronize the set.
 local EXTRA_FRAME_NAMES = {
-    -- Third-party addon tooltips
     "AtlasLootTooltip",
-
-    -- Blizzard UI frames present across current Retail 12.x modules
     "AutoCompleteBox",
     "FriendsTooltip",
     "GeneralDockManagerOverflowButtonList",
     "QueueStatusFrame",
-
-    -- Battle pet tooltips
     "BattlePetTooltip",
     "PetBattlePrimaryAbilityTooltip",
     "PetBattlePrimaryUnitTooltip",
     "FloatingBattlePetTooltip",
     "FloatingPetBattleAbilityTooltip",
-
-    -- Garrison/mission table tooltips retained for legacy content
     "GarrisonMissionMechanicTooltip",
     "GarrisonMissionMechanicFollowerCounterTooltip",
     "GarrisonBonusAreaTooltip",
@@ -32,48 +24,76 @@ local EXTRA_FRAME_NAMES = {
     "GarrisonFollowerTooltip",
 }
 
-local function RegisterExtraTooltipFrames()
-    local general = addon.db and addon.db.general
-    if type(general) ~= "table" or general.skinMoreFrames ~= true then return end
+local owned = setmetatable({}, { __mode = "k" })
 
-    for _, name in ipairs(EXTRA_FRAME_NAMES) do
-        local frame = _G[name]
-        if frame then addon:RegisterTooltipFrame(frame) end
+local function RegisterOwned(tooltip)
+    if not addon:IsTooltipSafe(tooltip) then return end
+    if addon:RegisterTooltipFrame(tooltip) then owned[tooltip] = true end
+end
+
+local function UnregisterOwned()
+    if type(addon.UnregisterTooltipFrame) ~= "function" then return end
+    for tooltip in pairs(owned) do
+        addon:UnregisterTooltipFrame(tooltip)
+        owned[tooltip] = nil
     end
+end
+
+local function SyncExtraFrames()
+    local enabled = addon.MM:IsEnabled("SkinFrames")
+        and addon.db and addon.db.general and addon.db.general.skinMoreFrames == true
+    if not enabled then UnregisterOwned() return end
+
+    for _, name in ipairs(EXTRA_FRAME_NAMES) do RegisterOwned(_G[name]) end
 
     local questScrollFrame = QuestScrollFrame
-    local storyTooltip = questScrollFrame and questScrollFrame.StoryTooltip
-    if storyTooltip then addon:RegisterTooltipFrame(storyTooltip) end
+    local storyTooltip = addon:IsObjectAccessible(questScrollFrame)
+        and addon:SafeGet(questScrollFrame, "StoryTooltip") or nil
+    RegisterOwned(storyTooltip)
+end
+
+local function RelevantAddon(name)
+    return type(name) == "string" and (
+        name == "RothTooltip"
+        or name == "AtlasLootClassic"
+        or name == "AtlasLoot"
+        or name:find("^Blizzard_PlayerSpells") ~= nil
+        or name:find("^Blizzard_Collections") ~= nil
+        or name:find("^Blizzard_PetBattle") ~= nil
+        or name:find("^Blizzard_Garrison") ~= nil
+        or name:find("^Blizzard_FriendsFrame") ~= nil
+    )
+end
+
+local function OnAddonLoaded(_, name)
+    if RelevantAddon(name) then SyncExtraFrames() end
+end
+
+local function OnVariableChanged(_, key)
+    if key == "general.skinMoreFrames" then SyncExtraFrames() end
 end
 
 local M = {}
 
 function M:Init()
-    self.cbVarsLoaded = RegisterExtraTooltipFrames
-    self.cbLogin = RegisterExtraTooltipFrames
+    self.cbSync = SyncExtraFrames
+    self.cbAddonLoaded = OnAddonLoaded
+    self.cbVariable = OnVariableChanged
 end
 
 function M:Enable()
-    if addon.MM and addon.MM.AttachTrigger then
-        addon.MM:AttachTrigger("SkinFrames", "tooltip:variables:loaded", self.cbVarsLoaded, "tooltip:variables:loaded")
-    else
-        LibEvent:attachTrigger("tooltip:variables:loaded", self.cbVarsLoaded)
-    end
-
-    if addon.MM and addon.MM.AttachEvent then
-        addon.MM:AttachEvent("SkinFrames", "PLAYER_LOGIN, ADDON_LOADED", self.cbLogin, "PLAYER_LOGIN/ADDON_LOADED")
-    else
-        LibEvent:attachEvent("PLAYER_LOGIN", self.cbLogin)
-        LibEvent:attachEvent("ADDON_LOADED", self.cbLogin)
-    end
-
-    if addon.db then self.cbVarsLoaded() end
+    addon.MM:AttachTrigger("SkinFrames", "tooltip:variables:loaded", self.cbSync, "variables-loaded")
+    addon.MM:AttachTrigger("SkinFrames", "tooltip:variable:changed", self.cbVariable, "variable-changed")
+    addon.MM:AttachEvent("SkinFrames", "PLAYER_LOGIN", self.cbSync, "PLAYER_LOGIN")
+    addon.MM:AttachEvent("SkinFrames", "ADDON_LOADED", self.cbAddonLoaded, "ADDON_LOADED")
+    if addon.db then SyncExtraFrames() end
 end
 
-function M:Disable() end
+function M:Disable()
+    UnregisterOwned()
+end
+
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
 
-if addon.MM and addon.MM.RegisterModule then
-    addon.MM:RegisterModule("SkinFrames", M)
-end
+addon.MM:RegisterModule("SkinFrames", M)

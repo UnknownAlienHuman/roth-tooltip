@@ -1,116 +1,119 @@
--- RothTooltip Engine: Debug UI
--- Slash commands + export window
+-- RothTooltip diagnostic UI and slash commands.
 
 local _, addon = ...
 
 local function EnsureFrame()
-    if (addon.__DoctorFrame and addon.__DoctorFrame:IsObjectType("Frame")) then
+    if addon.__DoctorFrame and addon:IsObjectAccessible(addon.__DoctorFrame) then
         return addon.__DoctorFrame
     end
+    if InCombatLockdown() then return nil end
 
-    local f = CreateFrame("Frame", "RothTooltipDoctorFrame", UIParent, "BackdropTemplate")
-    f:SetSize(620, 480)
-    f:SetPoint("CENTER")
-    f:SetFrameStrata("DIALOG")
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    local ok, frame = pcall(CreateFrame, "Frame", "RothTooltipDoctorFrame", UIParent, "BackdropTemplate")
+    if not ok or not addon:IsObjectAccessible(frame) then return nil end
 
-    f:SetBackdrop({
+    frame:SetSize(620, 480)
+    frame:SetPoint("CENTER")
+    frame:SetFrameStrata("DIALOG")
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8X8",
         edgeFile = "Interface\\Buttons\\WHITE8X8",
         edgeSize = 1,
         insets = { left = 1, right = 1, top = 1, bottom = 1 },
     })
-    f:SetBackdropColor(0,0,0,0.9)
-    f:SetBackdropBorderColor(0.6,0.6,0.6,0.9)
+    frame:SetBackdropColor(0, 0, 0, 0.9)
+    frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 0.9)
 
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 12, -10)
     title:SetText("RothTooltip Doctor")
 
-    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
 
-    local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+    local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", 12, -32)
     scroll:SetPoint("BOTTOMRIGHT", -34, 12)
 
-    local eb = CreateFrame("EditBox", nil, scroll)
-    eb:SetMultiLine(true)
-    eb:SetAutoFocus(false)
-    eb:SetFontObject("ChatFontNormal")
-    eb:SetWidth(560)
-    eb:SetScript("OnEscapePressed", function() f:Hide() end)
+    local editBox = CreateFrame("EditBox", nil, scroll)
+    editBox:SetMultiLine(true)
+    editBox:SetAutoFocus(false)
+    editBox:SetFontObject("ChatFontNormal")
+    editBox:SetWidth(560)
+    editBox:SetScript("OnEscapePressed", function() frame:Hide() end)
+    scroll:SetScrollChild(editBox)
+    frame._editbox = editBox
 
-    scroll:SetScrollChild(eb)
-    f._editbox = eb
-
-    f:Hide()
-    addon.__DoctorFrame = f
-    return f
+    frame:Hide()
+    addon.__DoctorFrame = frame
+    return frame
 end
 
 function addon:ShowDoctor(text)
-    local f = EnsureFrame()
-    f._editbox:SetText(text or "")
-    f._editbox:HighlightText(0)
-    f:Show()
+    local frame = EnsureFrame()
+    if not frame then
+        print("RothTooltip: diagnostic window cannot be created in combat.")
+        return false
+    end
+    frame._editbox:SetText(text or "")
+    frame._editbox:HighlightText(0)
+    frame:Show()
+    return true
 end
 
-local function Cmd(msg)
-    msg = msg or ""
-    msg = msg:gsub("^%s+", ""):gsub("%s+$", "")
+local function ResolveModuleName(value)
+    if type(value) ~= "string" or value == "" or not addon.MM then return nil end
+    local wanted = value:lower()
+    for moduleName in pairs(addon.MM.modules or {}) do
+        if moduleName:lower() == wanted then return moduleName end
+    end
+end
 
-    local cmd, rest = msg:match("^(%S+)%s*(.*)$")
-    cmd = cmd and cmd:lower() or ""
+local function ModuleCommand(action, requested)
+    local moduleName = ResolveModuleName(requested)
+    if not moduleName then
+        print("RothTooltip: unknown module: " .. tostring(requested or ""))
+        return
+    end
 
-    if (cmd == "" or cmd == "help") then
+    local success
+    if action == "enable" then success = addon:EnableModule(moduleName)
+    elseif action == "disable" then success = addon:DisableModule(moduleName)
+    else success = addon:ToggleModule(moduleName) end
+
+    if success then
+        print(string.format("RothTooltip: module %s: %s", action, moduleName))
+    else
+        print(string.format("RothTooltip: module %s failed or is not permitted: %s", action, moduleName))
+    end
+end
+
+local function Command(message)
+    message = tostring(message or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local command, rest = message:match("^(%S+)%s*(.*)$")
+    command = command and command:lower() or ""
+
+    if command == "" or command == "help" then
         print("RothTooltip: /rtt help | errors | export | modules | enable <name> | disable <name> | toggle <name> | clear")
-        return
-    end
-
-    if (cmd == "errors" or cmd == "export") then
+    elseif command == "errors" or command == "export" then
         local text = addon.DoctorExportText and addon:DoctorExportText() or "(no doctor)"
-        local modules = (addon.MM and addon.MM.ExportText) and ("\n\n" .. addon.MM:ExportText()) or ""
+        local modules = addon.MM and addon.MM.ExportText and ("\n\n" .. addon.MM:ExportText()) or ""
         addon:ShowDoctor(text .. modules)
-        return
-    end
-
-    if (cmd == "modules") then
-        local modules = (addon.MM and addon.MM.ExportText) and addon.MM:ExportText() or "(no module manager)"
-        addon:ShowDoctor(modules)
-        return
-    end
-
-    if (cmd == "enable" and rest ~= "") then
-        addon:EnableModule(rest)
-        print("RothTooltip: module enabled: " .. rest)
-        return
-    end
-
-    if (cmd == "disable" and rest ~= "") then
-        addon:DisableModule(rest)
-        print("RothTooltip: module disabled: " .. rest)
-        return
-    end
-
-    if (cmd == "toggle" and rest ~= "") then
-        addon:ToggleModule(rest)
-        print("RothTooltip: module toggled: " .. rest)
-        return
-    end
-
-    if (cmd == "clear") then
-        if (addon.DoctorClear) then addon:DoctorClear() end
+    elseif command == "modules" then
+        addon:ShowDoctor(addon.MM and addon.MM.ExportText and addon.MM:ExportText() or "(no module manager)")
+    elseif (command == "enable" or command == "disable" or command == "toggle") and rest ~= "" then
+        ModuleCommand(command, rest)
+    elseif command == "clear" then
+        if addon.DoctorClear then addon:DoctorClear() end
         print("RothTooltip: doctor cleared")
-        return
+    else
+        print("RothTooltip: unknown command. /rtt help")
     end
-
-    print("RothTooltip: unknown command. /rtt help")
 end
 
 SLASH_ROTHTOOLTIPDOCTOR1 = "/rtt"
-SlashCmdList["ROTHTOOLTIPDOCTOR"] = Cmd
+SlashCmdList["ROTHTOOLTIPDOCTOR"] = Command
