@@ -26,10 +26,14 @@ local LOAD_ON_DEMAND_TOOLTIP_NAMES = {
 }
 
 local REFRESHABLE_TYPES = {}
-if Enum and type(Enum.TooltipDataType) == "table" then
-    REFRESHABLE_TYPES[Enum.TooltipDataType.Unit] = true
-    REFRESHABLE_TYPES[Enum.TooltipDataType.Item] = true
-    REFRESHABLE_TYPES[Enum.TooltipDataType.Spell] = true
+local tooltipDataTypes = Enum and Enum.TooltipDataType
+local function AddRefreshableType(typeID)
+    if type(typeID) == "number" then REFRESHABLE_TYPES[typeID] = true end
+end
+if type(tooltipDataTypes) == "table" then
+    AddRefreshableType(tooltipDataTypes.Unit)
+    AddRefreshableType(tooltipDataTypes.Item)
+    AddRefreshableType(tooltipDataTypes.Spell)
 end
 
 local refreshQueue = setmetatable({}, { __mode = "k" })
@@ -117,7 +121,7 @@ function addon:RequestManagedTooltipRefresh(matchFunc, reason)
             matches = ok and self:CanAccessValue(result) and result == true
         end
         if matches then
-            refreshQueue[tooltip] = reason or refreshQueue[tooltip] or "refresh"
+            refreshQueue[tooltip] = refreshQueue[tooltip] or reason or "refresh"
             queued = queued + 1
         end
     end)
@@ -155,9 +159,12 @@ local function IsRelevantLoadOnDemandAddon(name)
     return type(name) == "string" and (
         name == "RothTooltip"
         or name == "AtlasLootClassic"
+        or name == "AtlasLoot"
         or name:find("^Blizzard_PlayerSpells") ~= nil
         or name:find("^Blizzard_Collections") ~= nil
         or name:find("^Blizzard_PetBattle") ~= nil
+        or name:find("^Blizzard_Garrison") ~= nil
+        or name:find("^Blizzard_FriendsFrame") ~= nil
     )
 end
 
@@ -169,11 +176,26 @@ local function HideAndInvalidateVisibleTooltips()
     end)
 end
 
+local function RestrictionsActive()
+    return InCombatLockdown() == true
+        or (type(addon.HasSecretRestrictions) == "function" and addon:HasSecretRestrictions() == true)
+end
+
 local function RetryManagedTooltipSetup()
+    if RestrictionsActive() then return end
+    RegisterKnownTooltips(true)
     addon:ForEachManagedTooltip(function(tooltip)
         LibEvent:trigger("tooltip:init", tooltip)
     end)
     addon:RequestManagedTooltipRefresh(nil, "restriction-cleared")
+end
+
+local function OnRestrictionStateChanged()
+    if RestrictionsActive() then
+        HideAndInvalidateVisibleTooltips()
+    else
+        RetryManagedTooltipSetup()
+    end
 end
 
 local function RefreshLoadedItem(_, itemID, success)
@@ -181,6 +203,7 @@ local function RefreshLoadedItem(_, itemID, success)
     if not addon:CanAccessValue(success) or success ~= true then return end
 
     local itemType = Enum and Enum.TooltipDataType and Enum.TooltipDataType.Item
+    if type(itemType) ~= "number" then return end
     addon:RequestManagedTooltipRefresh(function(_, context)
         return context.type == itemType and context.itemID == itemID
     end, "GET_ITEM_INFO_RECEIVED")
@@ -207,8 +230,8 @@ LibEvent:attachEvent("PLAYER_ENTERING_WORLD", function()
     HideAndInvalidateVisibleTooltips()
 end)
 
-LibEvent:attachEvent("ADDON_RESTRICTION_STATE_CHANGED, PLAYER_REGEN_DISABLED",
-    HideAndInvalidateVisibleTooltips)
+LibEvent:attachEvent("ADDON_RESTRICTION_STATE_CHANGED", OnRestrictionStateChanged)
+LibEvent:attachEvent("PLAYER_REGEN_DISABLED", HideAndInvalidateVisibleTooltips)
 LibEvent:attachEvent("PLAYER_REGEN_ENABLED", RetryManagedTooltipSetup)
 LibEvent:attachEvent("GET_ITEM_INFO_RECEIVED", RefreshLoadedItem)
 LibEvent:attachEvent("MODIFIER_STATE_CHANGED", RefreshForModifier)
