@@ -12,11 +12,10 @@ Engine\Policy.lua
 Engine\ModuleManager.lua
 Engine\Doctor.lua
 Engine\Debug.lua
-Engine\Style.lua
-Engine\TooltipBootstrap.lua
 Core.lua
 Engine\Midnight.lua
-Engine\Runtime12_1.lua
+Engine\Style.lua
+Engine\TooltipRegistry.lua
 Engine\TooltipProcessor.lua
 Config.lua
 General.lua
@@ -34,4 +33,7 @@ SkinFrames.lua
 
 libs\Template.xml
 locales\locales.xml
+Options\Core.lua
+Options\Profile.lua
+Options\DIY.lua
 Options.lua
