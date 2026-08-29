@@ -5,7 +5,7 @@ RothTooltipDB = RothTooltipDB or {}
 RothTooltipCharacterDB = RothTooltipCharacterDB or {}
 
 local StatusTextByBar = setmetatable({}, { __mode = "k" })
-local statusBarInitialized = false
+local StatusStateByBar = setmetatable({}, { __mode = "k" })
 local itemRefButtonStyled = false
 
 local REACTION_COLORS = {
@@ -43,7 +43,6 @@ function addon:GetStatusBarText(bar)
     local text = StatusTextByBar[bar]
     if self:IsObjectAccessible(text) then return text end
     StatusTextByBar[bar] = nil
-    return nil
 end
 
 local function ResolveStatusBarUnit()
@@ -156,42 +155,58 @@ local function HookScript(frame, scriptName, callback)
 end
 
 local function SetupStatusBar()
-    if statusBarInitialized or not addon:IsObjectAccessible(GameTooltipStatusBar) then return end
     local bar = GameTooltipStatusBar
+    if not addon:IsObjectAccessible(bar) then return end
 
-    local background = addon:SafeMethod(bar, "CreateTexture", nil, "BACKGROUND")
-    if addon:IsObjectAccessible(background) then
-        addon:SafeMethod(background, "SetAllPoints")
-        addon:SafeMethod(background, "SetColorTexture", 1, 1, 1)
-        addon:SafeMethod(background, "SetVertexColor", 0.2, 0.2, 0.2, 0.8)
+    local state = StatusStateByBar[bar]
+    if type(state) ~= "table" then
+        state = {}
+        StatusStateByBar[bar] = state
+    end
+
+    if not state.background then
+        local background = addon:SafeMethod(bar, "CreateTexture", nil, "BACKGROUND")
+        if addon:IsObjectAccessible(background) then
+            addon:SafeMethod(background, "SetAllPoints")
+            addon:SafeMethod(background, "SetColorTexture", 1, 1, 1)
+            addon:SafeMethod(background, "SetVertexColor", 0.2, 0.2, 0.2, 0.8)
+            state.background = background
+        end
     end
 
     local general = addon.db and addon.db.general or {}
-    local fontSize = tonumber(general.statusbarFontSize) or 10
-    local fontFlag = addon:NormalizeFontFlag(general.statusbarFontFlag or "THINOUTLINE", "THINOUTLINE")
-    local text = addon:SafeMethod(bar, "CreateFontString", nil, "OVERLAY")
-    if addon:IsObjectAccessible(text) then
-        StatusTextByBar[bar] = text
-        addon:SafeMethod(text, "SetPoint", "CENTER")
-        local font = addon:IsObjectAccessible(NumberFontNormal)
-            and addon:SafeMethod(NumberFontNormal, "GetFont") or nil
-        if type(font) == "string" then addon:SafeMethod(text, "SetFont", font, fontSize, fontFlag) end
+    if not addon:IsObjectAccessible(StatusTextByBar[bar]) then
+        local text = addon:SafeMethod(bar, "CreateFontString", nil, "OVERLAY")
+        if addon:IsObjectAccessible(text) then
+            StatusTextByBar[bar] = text
+            addon:SafeMethod(text, "SetPoint", "CENTER")
+            local font = addon:IsObjectAccessible(NumberFontNormal)
+                and addon:SafeMethod(NumberFontNormal, "GetFont") or nil
+            if type(font) == "string" then
+                addon:SafeMethod(text, "SetFont", font,
+                    tonumber(general.statusbarFontSize) or 10,
+                    addon:NormalizeFontFlag(general.statusbarFontFlag or "THINOUTLINE", "THINOUTLINE"))
+            end
+        end
     end
 
-    local onShow = HookScript(bar, "OnShow", function(self)
-        ColorStatusBar(self)
-        UpdateStatusText(self)
-        local config = addon.db and addon.db.general
-        if type(config) == "table" and config.statusbarHeight == 0 then addon:SafeMethod(self, "Hide") end
-    end)
-    local onValue = HookScript(bar, "OnValueChanged", function(self)
-        UpdateStatusText(self)
-        ColorStatusBar(self)
-    end)
+    if not state.onShow then
+        state.onShow = HookScript(bar, "OnShow", function(self)
+            ColorStatusBar(self)
+            UpdateStatusText(self)
+            local config = addon.db and addon.db.general
+            if type(config) == "table" and config.statusbarHeight == 0 then
+                addon:SafeMethod(self, "Hide")
+            end
+        end)
+    end
 
-    -- Do not mark setup complete if ScriptBindings were temporarily forbidden;
-    -- a later restriction transition or ADDON_LOADED callback can retry.
-    statusBarInitialized = onShow or onValue
+    if not state.onValueChanged then
+        state.onValueChanged = HookScript(bar, "OnValueChanged", function(self)
+            UpdateStatusText(self)
+            ColorStatusBar(self)
+        end)
+    end
 end
 
 local function RunMigrations(db, oldVersion)
@@ -246,13 +261,59 @@ local function BuildActiveDB(useCharacter)
     return addon.db
 end
 
+local function BroadcastProfile(reason)
+    addon.__RT_VariablesLoaded = true
+    LibEvent:trigger("tooltip:variables:loaded")
+    LibEvent:trigger("ROTHTOOLTIP_GENERAL_INIT")
+    if type(addon.RefreshManagedTooltipsMatching) == "function" then
+        addon:RefreshManagedTooltipsMatching(nil, reason or "profile")
+    end
+end
+
+function addon:IsUsingCharacterProfile()
+    return type(RothTooltipDB.general) == "table"
+        and RothTooltipDB.general.SavedVariablesPerCharacter == true
+end
+
+function addon:GetActiveProfileStore()
+    return self:IsUsingCharacterProfile() and RothTooltipCharacterDB or RothTooltipDB
+end
+
 function addon:SelectSavedVariableScope(useCharacter)
     if not self.__RT_DefaultDB then self.__RT_DefaultDB = Copy(self.db or {}) end
     BuildActiveDB(useCharacter == true)
-    self.__RT_VariablesLoaded = true
-    LibEvent:trigger("tooltip:variables:loaded")
-    LibEvent:trigger("ROTHTOOLTIP_GENERAL_INIT")
+    BroadcastProfile("saved-variable-scope")
     return self.db
+end
+
+function addon:ReapplyActiveProfile(reason)
+    if not self.__RT_DefaultDB then self.__RT_DefaultDB = Copy(self.db or {}) end
+    BuildActiveDB(self:IsUsingCharacterProfile())
+    BroadcastProfile(reason or "reapply-profile")
+    return self.db
+end
+
+function addon:ImportProfile(data)
+    if type(data) ~= "table" then return false end
+    if not self.__RT_DefaultDB then self.__RT_DefaultDB = Copy(self.db or {}) end
+
+    local candidate = Copy(data)
+    self:FixNumericKey(candidate)
+    candidate = self:MergeVariable(Copy(self.__RT_DefaultDB), candidate)
+    RunMigrations(candidate, tonumber(candidate.version) or 0)
+
+    local useCharacter = self:IsUsingCharacterProfile()
+    candidate.general = candidate.general or {}
+    candidate.general.SavedVariablesPerCharacter = useCharacter
+    if useCharacter then
+        RothTooltipCharacterDB = candidate
+    else
+        RothTooltipDB = candidate
+    end
+
+    BuildActiveDB(useCharacter)
+    BroadcastProfile("import-profile")
+    return true
 end
 
 local function SetupTooltipFonts()
@@ -286,21 +347,13 @@ local function InitOnce()
     addon.__RT_GeneralInitialized = true
     addon.__RT_DefaultDB = Copy(addon.db or {})
 
-    local accountVersion = tonumber(RothTooltipDB.version) or 0
-    local characterVersion = tonumber(RothTooltipCharacterDB.version) or 0
-    RunMigrations(RothTooltipDB, accountVersion)
-    RunMigrations(RothTooltipCharacterDB, characterVersion)
-
-    local useCharacter = type(RothTooltipDB.general) == "table"
-        and RothTooltipDB.general.SavedVariablesPerCharacter == true
-    BuildActiveDB(useCharacter)
-    addon.__RT_VariablesLoaded = true
-
+    RunMigrations(RothTooltipDB, tonumber(RothTooltipDB.version) or 0)
+    RunMigrations(RothTooltipCharacterDB, tonumber(RothTooltipCharacterDB.version) or 0)
+    BuildActiveDB(addon:IsUsingCharacterProfile())
     SetupStatusBar()
     SetupItemRefCloseButton()
     SetupTooltipFonts()
-    LibEvent:trigger("tooltip:variables:loaded")
-    LibEvent:trigger("ROTHTOOLTIP_GENERAL_INIT")
+    BroadcastProfile("initial-load")
 end
 
 local M = {}
