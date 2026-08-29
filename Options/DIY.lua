@@ -38,6 +38,7 @@ end
 local function CreateDropLine(frame, lineNumber)
     local line = Preview.lines[lineNumber]
     if line then return line end
+    if InCombatLockdown() then return nil end
 
     line = CreateFrame("Frame", nil, frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
     line:SetSize(320, 24)
@@ -107,25 +108,36 @@ local function FinishDrag(element)
     if type(rows) ~= "table" then return end
 
     element:StopMovingOrSizing()
+    local fallbackRow = 1
+    for rowIndex, row in ipairs(rows) do
+        for _, elementKey in ipairs(row) do
+            if elementKey == element.key then fallbackRow = rowIndex end
+        end
+    end
     RemoveElementFromRows(rows, element.key)
 
+    local inserted = false
     if Preview.overButton then
         for _, row in ipairs(rows) do
             for index = 1, #row do
                 if row[index] == Preview.overButton.key then
                     table.insert(row, index, element.key)
-                    Preview.overButton = nil
+                    inserted = true
                     break
                 end
             end
-            if not Preview.overButton then break end
+            if inserted then break end
         end
     elseif Preview.overLine then
         local rowIndex = math.max(1, tonumber(Preview.overLine.line) or (#rows + 1))
         rows[rowIndex] = rows[rowIndex] or {}
         table.insert(rows[rowIndex], element.key)
-    else
-        rows[#rows + 1] = { element.key }
+        inserted = true
+    end
+
+    if not inserted then
+        rows[fallbackRow] = rows[fallbackRow] or {}
+        table.insert(rows[fallbackRow], element.key)
     end
 
     CompactRows(rows)
@@ -142,7 +154,7 @@ local function FinishDrag(element)
 end
 
 local function StartDrag(element)
-    if not Preview.frame then return end
+    if not Preview.frame or InCombatLockdown() then return end
     Preview.dragging = element
     Preview.overButton = nil
     Preview.overLine = nil
@@ -150,6 +162,9 @@ local function StartDrag(element)
 
     local cursorX, cursorY = GetCursorPosition()
     local scale = UIParent:GetEffectiveScale()
+    if type(cursorX) ~= "number" or type(cursorY) ~= "number"
+        or type(scale) ~= "number" or scale <= 0 then return end
+
     element:StartMoving()
     element:ClearAllPoints()
     element:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cursorX / scale, cursorY / scale)
@@ -159,6 +174,7 @@ end
 local function CreateElementButton(frame, elementKey)
     local element = Preview.elements[elementKey]
     if element then return element end
+    if InCombatLockdown() then return nil end
 
     element = CreateFrame("Button", nil, frame)
     element.key = elementKey
@@ -178,7 +194,7 @@ local function CreateElementButton(frame, elementKey)
     element:SetScript("OnDragStop", FinishDrag)
     element:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(Options.L[self.key])
+        GameTooltip:SetText(Options:Label(self.key))
         GameTooltip:Show()
     end)
     element:SetScript("OnLeave", GameTooltip_Hide)
@@ -202,19 +218,19 @@ function Preview:Render()
 
     for rowIndex, entries in ipairs(rows) do
         local line = CreateDropLine(frame, rowIndex)
+        if not line then return end
         local lineWidth = 0
         if type(entries) == "table" then
             for _, elementKey in ipairs(entries) do
                 local config = rows[elementKey]
                 if type(config) == "table" and config.enable == true then
                     local element = CreateElementButton(frame, elementKey)
+                    if not element then return end
                     local value = raw[elementKey]
                     if value == nil then value = PLACEHOLDER[elementKey] end
-                    if config.color and config.wildcard then
-                        value = addon:FormatData(value, config, raw)
-                    else
-                        value = addon:SafeToString(value, "")
-                    end
+                    value = config.color and config.wildcard
+                        and addon:FormatData(value, config, raw)
+                        or addon:SafeToString(value, "")
 
                     element.text:SetText(value)
                     element:SetWidth(math.max(4, element.text:GetWidth() + 4))
@@ -236,6 +252,7 @@ function Preview:Render()
 
     for lineIndex = 1, dropRow do
         local line = CreateDropLine(frame, lineIndex)
+        if not line then return end
         line:Show()
         line:SetWidth(totalWidth)
         line:ClearAllPoints()
@@ -261,6 +278,7 @@ end
 
 local function CreatePreview()
     if Preview.frame and addon:IsObjectAccessible(Preview.frame) then return Preview.frame end
+    if InCombatLockdown() then return nil end
 
     local frame = CreateFrame("Frame", nil, UIParent)
     frame.identity = "diy"
@@ -291,7 +309,7 @@ local function CreatePreview()
     tips:SetPoint("BOTTOM", 0, 10)
     local font, size = tips:GetFont()
     tips:SetFont(font, size or 12, "NONE")
-    tips:SetText(Options.L["<Drag element to customize the style>"])
+    tips:SetText(Options:Label("<Drag element to customize the style>"))
 
     Preview.frame = frame
     addon:RegisterTooltipFrame(frame)
@@ -299,11 +317,12 @@ local function CreatePreview()
 end
 
 function Options:OpenDIYEditor()
+    if InCombatLockdown() then return end
     local frame = CreatePreview()
     if frame then frame:Show(); Preview:Render() end
 end
 
 LibEvent:attachTrigger("tooltip:variables:loaded, tooltip:variable:changed", function()
     local frame = Preview.frame
-    if frame and frame:IsShown() then Preview:Render() end
+    if frame and frame:IsShown() and not InCombatLockdown() then Preview:Render() end
 end)
