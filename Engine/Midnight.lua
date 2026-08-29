@@ -1,9 +1,8 @@
 -- RothTooltip Engine: authoritative Retail 12.1 tooltip data boundary.
 --
--- This file owns restriction predicates, sanitized tooltip context, managed
--- tooltip discovery, type-preserving refresh, owner-chain helpers, line access,
--- and ordinary unit metadata. Raw TooltipData and inaccessible values never
--- cross into feature state.
+-- This file owns restriction predicates, sanitized tooltip context, safe
+-- type-preserving refresh, owner-chain helpers, line access, and ordinary unit
+-- metadata. Managed-frame lifecycle is owned by Engine/TooltipRegistry.lua.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
@@ -20,33 +19,11 @@ local function CanAccessAll(...)
 end
 
 local function Call(fn, ...)
-    if not CanAccess(fn) or type(fn) ~= "function" then return nil end
-    if not CanAccessAll(...) then return nil end
-
-    local ok, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14 = pcall(fn, ...)
-    if not ok then return nil end
-
-    if not CanAccess(a1) then a1 = nil end
-    if not CanAccess(a2) then a2 = nil end
-    if not CanAccess(a3) then a3 = nil end
-    if not CanAccess(a4) then a4 = nil end
-    if not CanAccess(a5) then a5 = nil end
-    if not CanAccess(a6) then a6 = nil end
-    if not CanAccess(a7) then a7 = nil end
-    if not CanAccess(a8) then a8 = nil end
-    if not CanAccess(a9) then a9 = nil end
-    if not CanAccess(a10) then a10 = nil end
-    if not CanAccess(a11) then a11 = nil end
-    if not CanAccess(a12) then a12 = nil end
-    if not CanAccess(a13) then a13 = nil end
-    if not CanAccess(a14) then a14 = nil end
-    return a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14
+    return addon:SafeCall("Midnight", fn, ...)
 end
 
 local function ReadField(tbl, key)
-    if not CanAccess(tbl) or type(tbl) ~= "table" then return nil end
-    if not CanAccess(key) then return nil end
-
+    if not CanAccess(tbl) or type(tbl) ~= "table" or not CanAccess(key) then return nil end
     local ok, value = pcall(function() return tbl[key] end)
     if not ok or not CanAccess(value) then return nil end
     return value
@@ -55,20 +32,17 @@ end
 local function ReadNumber(tbl, key)
     local value = ReadField(tbl, key)
     if type(value) == "number" then return value end
-    return nil
 end
 
 local function ReadString(tbl, key)
     local value = ReadField(tbl, key)
     if type(value) == "string" and value ~= "" then return value end
-    return nil
 end
 
 local function QuerySecretPredicate(fn, ...)
     -- RothTooltip targets Retail 12.1. Missing patch-critical predicates are a
     -- denied capability, not permission to probe the underlying API.
     if type(fn) ~= "function" or not CanAccessAll(...) then return true end
-
     local ok, result = pcall(fn, ...)
     if not ok or not CanAccess(result) then return true end
     return result == true
@@ -122,7 +96,6 @@ local function TooltipIsType(tooltip, tooltipType)
     if type(tooltipType) ~= "number" or not addon:IsObjectAccessible(tooltip) then return false end
     local fn = addon:SafeGet(tooltip, "IsTooltipType")
     if type(fn) ~= "function" then return false end
-
     local ok, result = pcall(fn, tooltip, tooltipType)
     return ok and CanAccess(result) and result == true
 end
@@ -143,12 +116,10 @@ local function GetTooltipPrimaryData(tooltip, suppliedData)
     if type(fn) ~= "function" then return nil end
     local data = Call(fn, tooltip)
     if type(data) == "table" then return data end
-    return nil
 end
 
 local function NormalizeLink(value)
-    if not CanAccess(value) or type(value) ~= "string" or value == "" then return nil end
-    return value
+    if CanAccess(value) and type(value) == "string" and value ~= "" then return value end
 end
 
 local function ResolveItemID(itemInfo)
@@ -159,7 +130,6 @@ local function ResolveItemID(itemInfo)
 
     local itemID = Call(C_Item.GetItemInfoInstant, itemInfo)
     if type(itemID) == "number" then return itemID end
-    return nil
 end
 
 local function ResolveDisplayedSpellID(tooltip)
@@ -171,7 +141,6 @@ local function ResolveDisplayedSpellID(tooltip)
     local _, second, third = Call(getSpell, tooltip)
     if type(third) == "number" and third > 0 then return third end
     if type(second) == "number" and second > 0 then return second end
-    return nil
 end
 
 local ContextFields = {
@@ -187,7 +156,6 @@ local ContextFields = {
 
 local function CopyOrdinaryContext(context)
     if not CanAccess(context) or type(context) ~= "table" then return nil end
-
     local clean = {}
     for key, expectedType in pairs(ContextFields) do
         local value = ReadField(context, key)
@@ -264,7 +232,6 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
             or NormalizeLink(ReadField(tooltipData, "link")),
         guid = ReadString(tooltipData, "guid"),
     }
-
     local suppliedUnit = ReadString(tooltipData, "unitToken") or ReadString(tooltipData, "unit")
 
     if context.type == itemType or TooltipIsType(tooltip, itemType) then
@@ -356,19 +323,15 @@ end
 function addon:SafeGetSpellID(tooltip)
     local context = self:GetPrimaryTooltipContext(tooltip)
     if type(context) == "table" and type(context.spellID) == "number" then return context.spellID end
-
     local _, second, third = self:SafeGetSpell(tooltip)
     if type(third) == "number" then return third end
     if type(second) == "number" then return second end
-    return nil
 end
 
 function addon:GetTooltipUnit(tooltip)
     if not self:IsObjectAccessible(tooltip) then return nil end
     local context = self:GetPrimaryTooltipContext(tooltip)
-    if type(context) == "table" and type(context.unitToken) == "string" then
-        return context.unitToken
-    end
+    if type(context) == "table" and type(context.unitToken) == "string" then return context.unitToken end
 
     local fn = addon:SafeGet(tooltip, "GetUnit")
     if type(fn) ~= "function" then return nil end
@@ -379,7 +342,6 @@ end
 local function GetTooltipOwner(tooltip)
     local owner = addon:SafeMethod(tooltip, "GetOwner")
     if addon:IsObjectAccessible(owner) then return owner end
-    return nil
 end
 
 local function WalkOwnerChain(owner, visitor)
@@ -390,19 +352,16 @@ local function WalkOwnerChain(owner, visitor)
         current = addon:SafeMethod(current, "GetParent")
         if current == nil then return nil end
     end
-    return nil
 end
 
 local function FrameName(frame)
     local name = addon:SafeMethod(frame, "GetName")
     if type(name) == "string" then return name end
-    return nil
 end
 
 local function FrameAttribute(frame, key)
     local value = addon:SafeMethod(frame, "GetAttribute", key)
     if CanAccess(value) then return value end
-    return nil
 end
 
 local function FrameUnit(frame)
@@ -415,7 +374,6 @@ end
 function addon:FindMouseFocus(predicate)
     local owner = GetTooltipOwner(GameTooltip)
     if not owner then return nil end
-
     return WalkOwnerChain(owner, function(frame, depth)
         if type(predicate) ~= "function" then return depth == 0 end
         local ok, result = pcall(predicate, frame, depth + 1)
@@ -443,13 +401,11 @@ end
 function addon:IsActionBar(tooltip)
     local owner = GetTooltipOwner(tooltip)
     if not owner then return false end
-
     return WalkOwnerChain(owner, function(frame)
         local action = addon:SafeGet(frame, "action")
         if type(action) == "number" then return true end
         action = FrameAttribute(frame, "action")
         if type(action) == "number" then return true end
-
         local name = FrameName(frame)
         return type(name) == "string" and (
             name:find("ActionButton", 1, true)
@@ -463,7 +419,6 @@ end
 function addon:IsBag(tooltip)
     local owner = GetTooltipOwner(tooltip)
     if not owner then return false end
-
     return WalkOwnerChain(owner, function(frame)
         if type(addon:SafeGet(frame, "GetItemContextMatchResult")) == "function" then return true end
         local name = FrameName(frame)
@@ -473,89 +428,43 @@ function addon:IsBag(tooltip)
     end) ~= nil
 end
 
-function addon:IsManagedTooltip(tooltip)
-    if not self:IsTooltipSafe(tooltip) or type(self.tooltipSet) ~= "table" then return false end
-    if self.tooltipSet[tooltip] then return true end
-    local parent = self:SafeMethod(tooltip, "GetParent")
-    return self:IsObjectAccessible(parent) and self.tooltipSet[parent] == true
-end
+local function CallTooltipSetter(tooltip, methodName, argument)
+    if not addon:IsObjectAccessible(tooltip) then return false end
+    local fn = addon:SafeGet(tooltip, methodName)
+    if type(fn) ~= "function" or not CanAccess(argument) then return false end
 
-function addon:RegisterTooltipFrame(tooltip)
-    if not self:IsTooltipSafe(tooltip) then return false end
-
-    self.tooltipSet = self.tooltipSet or setmetatable({}, { __mode = "k" })
-    self.tooltips = self.tooltips or setmetatable({}, { __mode = "v" })
-    if self.tooltipSet[tooltip] then return true end
-
-    self.tooltipSet[tooltip] = true
-    self.tooltips[#self.tooltips + 1] = tooltip
-    LibEvent:trigger("tooltip:init", tooltip)
-    return true
-end
-
-function addon:ForEachManagedTooltip(callback)
-    if type(callback) ~= "function" or type(self.tooltipSet) ~= "table" then return 0 end
-    local count = 0
-    for tooltip in pairs(self.tooltipSet) do
-        if self:IsTooltipSafe(tooltip) then
-            count = count + 1
-            callback(tooltip, count)
-        end
-    end
-    return count
-end
-
-function addon:ForEachVisibleManagedTooltip(callback)
-    if type(callback) ~= "function" then return 0 end
-    local count = 0
-    self:ForEachManagedTooltip(function(tooltip)
-        if self:SafeMethod(tooltip, "IsShown") == true then
-            count = count + 1
-            callback(tooltip, count)
-        end
-    end)
-    return count
+    local ok, result = pcall(fn, tooltip, argument)
+    if not ok or not CanAccess(result) then return false end
+    return result ~= false
 end
 
 function addon:RefreshTooltipSafe(tooltip, reason)
-    if not self:IsManagedTooltip(tooltip) or self:SafeMethod(tooltip, "IsShown") ~= true then return false end
+    if type(self.IsManagedTooltip) ~= "function" or not self:IsManagedTooltip(tooltip) then return false end
+    if self:SafeMethod(tooltip, "IsShown") ~= true then return false end
+
     local context = self:GetPrimaryTooltipContext(tooltip)
     if type(context) ~= "table" then return false end
-
     local dataTypes = Enum and Enum.TooltipDataType
     if type(dataTypes) ~= "table" then return false end
 
     if context.type == dataTypes.Unit then
         local unit = context.unitToken
         if type(unit) ~= "string" or self:IsUnitIdentityRestricted(unit) then return false end
-        local fn = self:SafeGet(tooltip, "SetUnit")
-        if type(fn) ~= "function" then return false end
-        local result = Call(fn, tooltip, unit)
-        return result ~= false
+        return CallTooltipSetter(tooltip, "SetUnit", unit)
     elseif context.type == dataTypes.Item then
-        local fn
-        local argument
         if type(context.hyperlink) == "string" then
-            fn = self:SafeGet(tooltip, "SetHyperlink")
-            argument = context.hyperlink
+            return CallTooltipSetter(tooltip, "SetHyperlink", context.hyperlink)
         elseif type(context.itemID) == "number" then
-            fn = self:SafeGet(tooltip, "SetItemByID")
-            argument = context.itemID
+            return CallTooltipSetter(tooltip, "SetItemByID", context.itemID)
         end
-        if type(fn) ~= "function" then return false end
-        local result = Call(fn, tooltip, argument)
-        return result ~= false
-    elseif context.type == dataTypes.Spell then
-        if type(context.spellID) ~= "number" then return false end
-        local fn = self:SafeGet(tooltip, "SetSpellByID")
-        if type(fn) ~= "function" then return false end
-        local result = Call(fn, tooltip, context.spellID)
-        return result ~= false
+    elseif context.type == dataTypes.Spell and type(context.spellID) == "number" then
+        return CallTooltipSetter(tooltip, "SetSpellByID", context.spellID)
     end
     return false
 end
 
 function addon:RefreshManagedTooltipsMatching(matchFunc, reason)
+    if type(self.ForEachVisibleManagedTooltip) ~= "function" then return 0 end
     local refreshed = 0
     self:ForEachVisibleManagedTooltip(function(tooltip)
         local context = self:GetPrimaryTooltipContext(tooltip)
@@ -585,7 +494,6 @@ function addon:FindLine(tooltip, keyword)
             end
         end
     end
-    return nil
 end
 
 function addon:HideLine(tooltip, keyword)
@@ -611,11 +519,10 @@ function addon:GetLine(tooltip, number)
     return _G[name .. "TextLeft" .. number], _G[name .. "TextRight" .. number]
 end
 
-local function ElementEnabled(elements, key, defaultValue)
-    if type(elements) ~= "table" then return defaultValue ~= false end
-    local config = elements[key]
-    if type(config) ~= "table" then return defaultValue ~= false end
-    return config.enable == true
+local function ElementEnabled(elements, key)
+    return type(elements) == "table"
+        and type(elements[key]) == "table"
+        and elements[key].enable == true
 end
 
 function addon:GetQuestBossIcon(unit)
@@ -647,7 +554,8 @@ function addon:GetClassIcon(class)
     local coordinates = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[string.upper(class)]
     if type(coordinates) ~= "table" then return nil end
     local x1, x2, y1, y2 = unpack(coordinates)
-    if type(x1) ~= "number" or type(x2) ~= "number" or type(y1) ~= "number" or type(y2) ~= "number" then return nil end
+    if type(x1) ~= "number" or type(x2) ~= "number"
+        or type(y1) ~= "number" or type(y2) ~= "number" then return nil end
     return string.format(self.icons.class, x1 * 256, x2 * 256, y1 * 256, y2 * 256)
 end
 
@@ -674,7 +582,8 @@ function addon:GetUnitSpeed(unit)
 end
 
 function addon:GetTitle(name, pvpName)
-    if type(name) ~= "string" or name == "" or type(pvpName) ~= "string" or pvpName == "" or name == pvpName then return nil end
+    if type(name) ~= "string" or name == "" or type(pvpName) ~= "string"
+        or pvpName == "" or name == pvpName then return nil end
     local first, last = string.find(pvpName, name, 1, true)
     if not first then return nil end
 
@@ -702,13 +611,12 @@ function addon:GetZone(unit, unitName, realm)
         local _, zone = GetRosterNameAndZone(tonumber(raidIndex))
         return zone
     end
-
     if not unit:match("^party%d+$") then return nil end
+
     local fullName = unitName .. "-" .. realm
     local count = Call(GetNumGroupMembers)
     if type(count) ~= "number" or count < 1 then count = 5 end
     count = math.min(count, 40)
-
     for index = 1, count do
         local name, zone = GetRosterNameAndZone(index)
         if name == unitName or name == fullName then return zone end
@@ -716,7 +624,8 @@ function addon:GetZone(unit, unitName, realm)
 end
 
 function addon:GetUnitInfo(unit, elements)
-    if not CanAccess(unit) or type(unit) ~= "string" or unit == "" or self:IsUnitIdentityRestricted(unit) then return nil end
+    if not CanAccess(unit) or type(unit) ~= "string" or unit == ""
+        or self:IsUnitIdentityRestricted(unit) then return nil end
 
     local name, realm = Call(UnitName, unit)
     local level = Call(UnitLevel, unit)
@@ -726,7 +635,6 @@ function addon:GetUnitInfo(unit, elements)
     local reaction = Call(UnitReaction, unit, "player")
     local classification = Call(UnitClassification, unit)
     local isPlayer = self:SafeCallBoolean(UnitIsPlayer, unit)
-    local connected = self:SafeCallBoolean(UnitIsConnected, unit)
 
     if type(name) ~= "string" then name = nil end
     if type(realm) ~= "string" then realm = nil end
@@ -739,24 +647,26 @@ function addon:GetUnitInfo(unit, elements)
     if type(reaction) ~= "number" then reaction = nil end
     if type(classification) ~= "string" then classification = nil end
 
-    local needTitle = ElementEnabled(elements, "title", false)
-    local needGender = ElementEnabled(elements, "gender", false)
-    local needRace = ElementEnabled(elements, "raceName", false)
-    local needGuild = ElementEnabled(elements, "guildName", false)
-        or ElementEnabled(elements, "guildRank", false)
-        or ElementEnabled(elements, "guildIndex", false)
-        or ElementEnabled(elements, "guildRealm", false)
-    local needRole = ElementEnabled(elements, "role", false) or ElementEnabled(elements, "roleIcon", false)
-    local needCreature = ElementEnabled(elements, "creature", false)
+    local needTitle = ElementEnabled(elements, "title")
+    local needGender = ElementEnabled(elements, "gender")
+    local needRace = ElementEnabled(elements, "raceName")
+    local needGuild = ElementEnabled(elements, "guildName")
+        or ElementEnabled(elements, "guildRank")
+        or ElementEnabled(elements, "guildIndex")
+        or ElementEnabled(elements, "guildRealm")
+    local needRole = ElementEnabled(elements, "role") or ElementEnabled(elements, "roleIcon")
+    local needCreature = ElementEnabled(elements, "creature")
+    local needConnection = ElementEnabled(elements, "statusDC")
 
     local pvpName = needTitle and Call(UnitPVPName, unit) or nil
     local gender = needGender and Call(UnitSex, unit) or nil
-    local raceName, race = needRace and Call(UnitRace, unit) or nil, nil
+    local raceName, race
     if needRace then raceName, race = Call(UnitRace, unit) end
     local guildName, guildRank, guildIndex, guildRealm
     if needGuild then guildName, guildRank, guildIndex, guildRealm = Call(GetGuildInfo, unit) end
     local role = needRole and Call(UnitGroupRolesAssigned, unit) or nil
     local creature = needCreature and Call(UnitCreatureType, unit) or nil
+    local connected = needConnection and self:SafeCallBoolean(UnitIsConnected, unit) or nil
 
     local raw = {
         unit = unit,
@@ -775,17 +685,17 @@ function addon:GetUnitInfo(unit, elements)
         statusDC = connected == false and OFFLINE or nil,
     }
 
-    raw.raidIcon = ElementEnabled(elements, "raidIcon", false) and self:GetRaidIcon(unit) or nil
-    raw.pvpIcon = ElementEnabled(elements, "pvpIcon", false) and self:GetPVPIcon(unit) or nil
-    raw.factionIcon = ElementEnabled(elements, "factionIcon", false) and self:GetFactionIcon(factionGroup) or nil
-    raw.classIcon = ElementEnabled(elements, "classIcon", false) and self:GetClassIcon(class) or nil
-    raw.roleIcon = ElementEnabled(elements, "roleIcon", false) and self:GetRoleIcon(unit) or nil
-    raw.questIcon = ElementEnabled(elements, "questIcon", false) and self:GetQuestBossIcon(unit) or nil
-    raw.friendIcon = ElementEnabled(elements, "friendIcon", false) and self:GetFriendIcon(unit) or nil
-    raw.statusAFK = ElementEnabled(elements, "statusAFK", false) and self:SafeCallBoolean(UnitIsAFK, unit) and AFK or nil
-    raw.statusDND = ElementEnabled(elements, "statusDND", false) and self:SafeCallBoolean(UnitIsDND, unit) and DND or nil
-    raw.moveSpeed = ElementEnabled(elements, "moveSpeed", false) and self:GetUnitSpeed(unit) or nil
-    raw.zone = ElementEnabled(elements, "zone", false) and name and self:GetZone(unit, name, raw.realm) or nil
+    raw.raidIcon = ElementEnabled(elements, "raidIcon") and self:GetRaidIcon(unit) or nil
+    raw.pvpIcon = ElementEnabled(elements, "pvpIcon") and self:GetPVPIcon(unit) or nil
+    raw.factionIcon = ElementEnabled(elements, "factionIcon") and self:GetFactionIcon(factionGroup) or nil
+    raw.classIcon = ElementEnabled(elements, "classIcon") and self:GetClassIcon(class) or nil
+    raw.roleIcon = ElementEnabled(elements, "roleIcon") and self:GetRoleIcon(unit) or nil
+    raw.questIcon = ElementEnabled(elements, "questIcon") and self:GetQuestBossIcon(unit) or nil
+    raw.friendIcon = ElementEnabled(elements, "friendIcon") and self:GetFriendIcon(unit) or nil
+    raw.statusAFK = ElementEnabled(elements, "statusAFK") and self:SafeCallBoolean(UnitIsAFK, unit) and AFK or nil
+    raw.statusDND = ElementEnabled(elements, "statusDND") and self:SafeCallBoolean(UnitIsDND, unit) and DND or nil
+    raw.moveSpeed = ElementEnabled(elements, "moveSpeed") and self:GetUnitSpeed(unit) or nil
+    raw.zone = ElementEnabled(elements, "zone") and name and self:GetZone(unit, name, raw.realm) or nil
 
     raw.title, raw.titleIsPrefix = self:GetTitle(name, pvpName)
     raw.gender = select(1, self:GetGender(gender))
@@ -800,7 +710,8 @@ function addon:GetUnitInfo(unit, elements)
     raw.reactionName = reaction and _G["FACTION_STANDING_LABEL" .. reaction] or nil
     raw.classifBoss = (classification == "worldboss" or level == -1) and BOSS or nil
     raw.classifElite = not raw.classifBoss and classification == "elite" and ELITE or nil
-    raw.classifRare = (classification == "rare" or classification == "rareelite") and GARRISON_MISSION_RARE or nil
+    raw.classifRare = (classification == "rare" or classification == "rareelite")
+        and GARRISON_MISSION_RARE or nil
     return raw
 end
 
