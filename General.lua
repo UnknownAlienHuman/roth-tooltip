@@ -4,6 +4,10 @@ local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 RothTooltipDB = RothTooltipDB or {}
 RothTooltipCharacterDB = RothTooltipCharacterDB or {}
 
+local StatusTextByBar = setmetatable({}, { __mode = "k" })
+local statusBarInitialized = false
+local itemRefButtonStyled = false
+
 local REACTION_COLORS = {
     [1] = { 1.0, 0.0, 0.0 },
     [2] = { 1.0, 0.0, 0.0 },
@@ -15,113 +19,90 @@ local REACTION_COLORS = {
     [8] = { 0.0, 0.9, 0.1 },
 }
 
-local function CanAccess(value)
-    return not addon.CanAccessValue or addon:CanAccessValue(value)
+local function Copy(value)
+    if type(CopyTable) == "function" then return CopyTable(value) end
+    if type(value) ~= "table" then return value end
+    local result = {}
+    for key, child in pairs(value) do result[Copy(key)] = Copy(child) end
+    return result
 end
 
 local function Call(fn, ...)
-    if not CanAccess(fn) or type(fn) ~= "function" then return nil end
-    if addon.CanAccessAllValues and not addon:CanAccessAllValues(...) then return nil end
-
-    local ok, a, b, c, d = pcall(fn, ...)
-    if not ok then return nil end
-    if not CanAccess(a) then a = nil end
-    if not CanAccess(b) then b = nil end
-    if not CanAccess(c) then c = nil end
-    if not CanAccess(d) then d = nil end
-    return a, b, c, d
+    return addon:SafeCall("General", fn, ...)
 end
 
 local function IsOrdinaryUnit(unit)
-    if not CanAccess(unit) or type(unit) ~= "string" or unit == "" then return false end
-    if addon.IsUnitIdentityRestricted and addon:IsUnitIdentityRestricted(unit) then return false end
-    return true
+    return addon:CanAccessValue(unit)
+        and type(unit) == "string"
+        and unit ~= ""
+        and not addon:IsUnitIdentityRestricted(unit)
+end
+
+function addon:GetStatusBarText(bar)
+    if not self:IsObjectAccessible(bar) then return nil end
+    local text = StatusTextByBar[bar]
+    if self:IsObjectAccessible(text) then return text end
+    StatusTextByBar[bar] = nil
+    return nil
 end
 
 local function ResolveStatusBarUnit()
     local unit = addon:GetTooltipUnit(GameTooltip)
     if IsOrdinaryUnit(unit) then return unit end
-
     unit = addon:GetMouseFocusUnit()
     if IsOrdinaryUnit(unit) then return unit end
-    return nil
-end
-
-local function GetUnitReactionColor(unit)
-    local reaction = Call(UnitReaction, unit, "player")
-    if type(reaction) ~= "number" then return nil end
-    local color = REACTION_COLORS[reaction]
-    if not color then return nil end
-    return color[1], color[2], color[3]
 end
 
 local function SmoothHealthColor(bar)
-    if not addon:IsObjectAccessible(bar) then return end
-
     local minimum, maximum = addon:SafeMethod(bar, "GetMinMaxValues")
     local current = addon:SafeMethod(bar, "GetValue")
-    if not CanAccess(minimum) or not CanAccess(maximum) or not CanAccess(current) then return end
-    if type(minimum) ~= "number" or type(maximum) ~= "number" or type(current) ~= "number" then return end
-    if maximum <= minimum then return end
+    if type(minimum) ~= "number" or type(maximum) ~= "number"
+        or type(current) ~= "number" or maximum <= minimum then return end
 
-    local fraction = (current - minimum) / (maximum - minimum)
-    if fraction > 1 then fraction = 1 elseif fraction < 0 then fraction = 0 end
-
-    local r, g
+    local fraction = math.max(0, math.min(1, (current - minimum) / (maximum - minimum)))
+    local red, green
     if fraction > 0.5 then
-        r = (1 - fraction) * 2
-        g = 1
+        red, green = (1 - fraction) * 2, 1
     else
-        r = 1
-        g = fraction * 2
+        red, green = 1, fraction * 2
     end
-    addon:SafeMethod(bar, "SetStatusBarColor", r, g, 0)
+    addon:SafeMethod(bar, "SetStatusBarColor", red, green, 0)
 end
 
 local function ColorStatusBar(bar)
     local general = addon.db and addon.db.general
     if type(general) ~= "table" or not addon:IsObjectAccessible(bar) then return end
-
-    if general.statusbarColor == "smooth" then
-        SmoothHealthColor(bar)
-        return
-    end
+    if general.statusbarColor == "smooth" then SmoothHealthColor(bar) return end
     if general.statusbarColor ~= "auto" then return end
 
     local unit = ResolveStatusBarUnit()
     if not unit then return end
 
-    local r, g, b
+    local red, green, blue
     local isPlayer = addon:SafeCallBoolean(UnitIsPlayer, unit)
     if isPlayer == true then
         local _, class = Call(UnitClass, unit)
-        if type(class) == "string" then
-            r, g, b = GetClassColor(class)
-        end
+        if type(class) == "string" then red, green, blue = Call(GetClassColor, class) end
     elseif isPlayer == false then
-        r, g, b = GetUnitReactionColor(unit)
+        local reaction = Call(UnitReaction, unit, "player")
+        local color = type(reaction) == "number" and REACTION_COLORS[reaction] or nil
+        if color then red, green, blue = color[1], color[2], color[3] end
     end
 
-    if type(r) == "number" and type(g) == "number" and type(b) == "number" then
-        addon:SafeMethod(bar, "SetStatusBarColor", r, g, b)
+    if type(red) == "number" and type(green) == "number" and type(blue) == "number" then
+        addon:SafeMethod(bar, "SetStatusBarColor", red, green, blue)
     end
-end
-
-local function GetStatusText(bar)
-    local text = addon:SafeGet(bar, "TextString")
-    if addon:IsObjectAccessible(text) then return text end
-    return nil
 end
 
 local function ClearStatusText(bar)
-    local text = GetStatusText(bar)
+    local text = addon:GetStatusBarText(bar)
     if text then addon:SafeMethod(text, "SetText", "") end
 end
 
 local function Abbreviate(value)
     if type(value) ~= "number" then return nil end
-    local ok, text = pcall(AbbreviateLargeNumbers, value)
-    if ok and CanAccess(text) then return text end
+    local text = Call(AbbreviateLargeNumbers, value)
+    if type(text) == "string" then return text end
     return tostring(value)
 end
 
@@ -134,57 +115,49 @@ local function UpdateStatusText(bar)
     end
 
     local unit = ResolveStatusBarUnit()
-    if not unit or (addon.IsUnitHealthRestricted and addon:IsUnitHealthRestricted(unit)) then
-        ClearStatusText(bar)
-        return
-    end
-
-    local text = GetStatusText(bar)
+    if not unit or addon:IsUnitHealthRestricted(unit) then ClearStatusText(bar) return end
+    local text = addon:GetStatusBarText(bar)
     if not text then return end
 
-    local dead = addon:SafeCallBoolean(UnitIsDeadOrGhost, unit)
     local maximum = Call(UnitHealthMax, unit)
-    if type(maximum) ~= "number" or maximum <= 0 then
-        ClearStatusText(bar)
-        return
-    end
+    if type(maximum) ~= "number" or maximum <= 0 then ClearStatusText(bar) return end
 
-    if dead == true then
-        local maximumText = Abbreviate(maximum)
-        if maximumText then
-            addon:SafeMethod(text, "SetFormattedText", "|cff999999%s|r |cffffcc33<%s>|r", maximumText, DEAD)
-        else
-            addon:SafeMethod(text, "SetText", DEAD)
-        end
+    if addon:SafeCallBoolean(UnitIsDeadOrGhost, unit) == true then
+        addon:SafeMethod(text, "SetFormattedText", "|cff999999%s|r |cffffcc33<%s>|r",
+            Abbreviate(maximum), DEAD)
         return
     end
 
     local current = Call(UnitHealth, unit)
-    if type(current) ~= "number" then
-        ClearStatusText(bar)
-        return
-    end
-
+    if type(current) ~= "number" then ClearStatusText(bar) return end
     local formatMode = general.statusbarTextFormat or "health/max"
     if formatMode == "none" then
         addon:SafeMethod(text, "SetText", "")
-        return
-    end
-
-    local percentage = current / maximum * 100
-    if formatMode == "percent" then
-        addon:SafeMethod(text, "SetFormattedText", "%.0f%%", percentage)
+    elseif formatMode == "percent" then
+        addon:SafeMethod(text, "SetFormattedText", "%.0f%%", current / maximum * 100)
     elseif formatMode == "health (percent)" then
-        addon:SafeMethod(text, "SetFormattedText", "%s (%.0f%%)", Abbreviate(current), percentage)
+        addon:SafeMethod(text, "SetFormattedText", "%s (%.0f%%)",
+            Abbreviate(current), current / maximum * 100)
     else
         addon:SafeMethod(text, "SetText", Abbreviate(current) .. " / " .. Abbreviate(maximum))
     end
 end
 
+local function HookScript(frame, scriptName, callback)
+    if not addon:CanBindScripts(frame) then return false end
+    local hasScript = addon:SafeGet(frame, "HasScript")
+    if type(hasScript) == "function" then
+        local ok, supported = pcall(hasScript, frame, scriptName)
+        if not ok or not addon:CanAccessValue(supported) or supported ~= true then return false end
+    end
+    local hook = addon:SafeGet(frame, "HookScript")
+    if type(hook) ~= "function" then return false end
+    return pcall(hook, frame, scriptName, callback)
+end
+
 local function SetupStatusBar()
+    if statusBarInitialized or not addon:IsObjectAccessible(GameTooltipStatusBar) then return end
     local bar = GameTooltipStatusBar
-    if addon.__RT_GeneralStatusBarInitialized or not addon:IsObjectAccessible(bar) then return end
-    addon.__RT_GeneralStatusBarInitialized = true
 
     local background = addon:SafeMethod(bar, "CreateTexture", nil, "BACKGROUND")
     if addon:IsObjectAccessible(background) then
@@ -194,67 +167,92 @@ local function SetupStatusBar()
     end
 
     local general = addon.db and addon.db.general or {}
-    local fontSize = type(general.statusbarFontSize) == "number" and general.statusbarFontSize or 10
+    local fontSize = tonumber(general.statusbarFontSize) or 10
     local fontFlag = addon:NormalizeFontFlag(general.statusbarFontFlag or "THINOUTLINE", "THINOUTLINE")
-
     local text = addon:SafeMethod(bar, "CreateFontString", nil, "OVERLAY")
     if addon:IsObjectAccessible(text) then
-        bar.TextString = text
+        StatusTextByBar[bar] = text
         addon:SafeMethod(text, "SetPoint", "CENTER")
-        local font = NumberFontNormal and NumberFontNormal:GetFont()
+        local font = addon:IsObjectAccessible(NumberFontNormal)
+            and addon:SafeMethod(NumberFontNormal, "GetFont") or nil
         if type(font) == "string" then addon:SafeMethod(text, "SetFont", font, fontSize, fontFlag) end
     end
 
-    bar:HookScript("OnShow", function(self)
+    local onShow = HookScript(bar, "OnShow", function(self)
         ColorStatusBar(self)
         UpdateStatusText(self)
         local config = addon.db and addon.db.general
-        if type(config) == "table" and config.statusbarHeight == 0 then
-            addon:SafeMethod(self, "Hide")
-        end
+        if type(config) == "table" and config.statusbarHeight == 0 then addon:SafeMethod(self, "Hide") end
     end)
-
-    bar:HookScript("OnValueChanged", function(self)
-        -- The callback value itself may be inaccessible in Retail 12.1. Read
-        -- only gated status-bar/unit state instead of branching on the payload.
+    local onValue = HookScript(bar, "OnValueChanged", function(self)
         UpdateStatusText(self)
         ColorStatusBar(self)
     end)
+
+    -- Do not mark setup complete if ScriptBindings were temporarily forbidden;
+    -- a later restriction transition or ADDON_LOADED callback can retry.
+    statusBarInitialized = onShow or onValue
 end
 
 local function RunMigrations(db, oldVersion)
-    if type(db) ~= "table" or type(oldVersion) ~= "number" then return end
+    if type(db) ~= "table" then return end
+    oldVersion = tonumber(oldVersion) or 0
 
     if oldVersion < 2.9 then
         db.item = db.item or {}
-        if db.item.showItemIcon == nil or db.item.showItemIcon == false then
-            db.item.showItemIcon = true
-        end
+        if db.item.showItemIcon == nil or db.item.showItemIcon == false then db.item.showItemIcon = true end
+    end
+
+    if type(db.unit) == "table" then
+        if type(db.unit.player) == "table" then db.unit.player.showTargetBy = nil end
+        if type(db.unit.npc) == "table" then db.unit.npc.showTargetBy = nil end
     end
 
     if type(db.general) == "table" then
-        db.general.legacyAuraFallback = nil
-        db.general.scrollEnabled = nil
-        db.general.scrollMaxHeight = nil
-        db.general.scrollWheelStep = nil
-        db.general.scrollMinLines = nil
-        db.general.autoWidthEnabled = nil
-        db.general.autoWidthMin = nil
-        db.general.autoWidthMax = nil
-        db.general.stableWidthMode = nil
-        db.general.nativeWrap = nil
-        db.general.layoutPipelineEnabled = nil
+        for _, key in ipairs({
+            "legacyAuraFallback", "scrollEnabled", "scrollMaxHeight", "scrollWheelStep",
+            "scrollMinLines", "autoWidthEnabled", "autoWidthMin", "autoWidthMax",
+            "stableWidthMode", "nativeWrap", "layoutPipelineEnabled",
+        }) do
+            db.general[key] = nil
+        end
     end
 end
 
 local function NormalizeSavedFontFlags()
     local general = addon.db and addon.db.general
     if type(general) ~= "table" then return end
-
     for _, key in ipairs({ "statusbarFontFlag", "headerFontFlag", "bodyFontFlag" }) do
-        local value = general[key]
-        if value == "NORMAL" or value == "NONE" then general[key] = "" end
+        if general[key] == "NORMAL" or general[key] == "NONE" then general[key] = "" end
     end
+end
+
+local function BuildActiveDB(useCharacter)
+    local defaults = Copy(addon.__RT_DefaultDB or addon.db or {})
+    RothTooltipDB = addon:MergeVariable(defaults, RothTooltipDB)
+    RothTooltipDB.general = RothTooltipDB.general or {}
+    RothTooltipDB.general.SavedVariablesPerCharacter = useCharacter == true
+
+    if useCharacter == true then
+        local characterDefaults = Copy(RothTooltipDB)
+        RothTooltipCharacterDB = addon:MergeVariable(characterDefaults, RothTooltipCharacterDB)
+        RothTooltipCharacterDB.general = RothTooltipCharacterDB.general or {}
+        RothTooltipCharacterDB.general.SavedVariablesPerCharacter = true
+        addon.db = RothTooltipCharacterDB
+    else
+        addon.db = RothTooltipDB
+    end
+    NormalizeSavedFontFlags()
+    return addon.db
+end
+
+function addon:SelectSavedVariableScope(useCharacter)
+    if not self.__RT_DefaultDB then self.__RT_DefaultDB = Copy(self.db or {}) end
+    BuildActiveDB(useCharacter == true)
+    self.__RT_VariablesLoaded = true
+    LibEvent:trigger("tooltip:variables:loaded")
+    LibEvent:trigger("ROTHTOOLTIP_GENERAL_INIT")
+    return self.db
 end
 
 local function SetupTooltipFonts()
@@ -267,91 +265,89 @@ local function SetupTooltipFonts()
 end
 
 local function SetupItemRefCloseButton()
-    if not addon:IsObjectAccessible(ItemRefCloseButton) then return end
-    if C_AddOns.IsAddOnLoaded("ElvUI") then return end
+    if itemRefButtonStyled or not addon:IsObjectAccessible(ItemRefCloseButton) then return end
+    if C_AddOns and type(C_AddOns.IsAddOnLoaded) == "function"
+        and C_AddOns.IsAddOnLoaded("ElvUI") then
+        itemRefButtonStyled = true
+        return
+    end
 
     addon:SafeMethod(ItemRefCloseButton, "SetSize", 14, 14)
     addon:SafeMethod(ItemRefCloseButton, "SetPoint", "TOPRIGHT", -4, -4)
     addon:SafeMethod(ItemRefCloseButton, "SetNormalTexture", "Interface\\Buttons\\UI-StopButton")
     addon:SafeMethod(ItemRefCloseButton, "SetPushedTexture", "Interface\\Buttons\\UI-StopButton")
-
     local texture = addon:SafeMethod(ItemRefCloseButton, "GetNormalTexture")
-    if addon:IsObjectAccessible(texture) then
-        addon:SafeMethod(texture, "SetVertexColor", 0.9, 0.6, 0)
-    end
+    if addon:IsObjectAccessible(texture) then addon:SafeMethod(texture, "SetVertexColor", 0.9, 0.6, 0) end
+    itemRefButtonStyled = true
 end
 
 local function InitOnce()
     if addon.__RT_GeneralInitialized then return end
     addon.__RT_GeneralInitialized = true
+    addon.__RT_DefaultDB = Copy(addon.db or {})
 
-    SetupItemRefCloseButton()
+    local accountVersion = tonumber(RothTooltipDB.version) or 0
+    local characterVersion = tonumber(RothTooltipCharacterDB.version) or 0
+    RunMigrations(RothTooltipDB, accountVersion)
+    RunMigrations(RothTooltipCharacterDB, characterVersion)
 
-    local oldAccountVersion = tonumber(RothTooltipDB.version) or 0
-    local oldCharacterVersion = tonumber(RothTooltipCharacterDB.version) or 0
+    local useCharacter = type(RothTooltipDB.general) == "table"
+        and RothTooltipDB.general.SavedVariablesPerCharacter == true
+    BuildActiveDB(useCharacter)
+    addon.__RT_VariablesLoaded = true
 
-    addon.db = addon:MergeVariable(addon.db, RothTooltipDB)
-    if addon.db.general.SavedVariablesPerCharacter == true then
-        local defaults = CopyTable(addon.db)
-        addon.db = addon:MergeVariable(defaults, RothTooltipCharacterDB)
-    end
-
-    RunMigrations(RothTooltipDB, oldAccountVersion)
-    if addon.db.general.SavedVariablesPerCharacter == true then
-        RunMigrations(RothTooltipCharacterDB, oldCharacterVersion)
-    end
-
-    NormalizeSavedFontFlags()
     SetupStatusBar()
-
+    SetupItemRefCloseButton()
+    SetupTooltipFonts()
     LibEvent:trigger("tooltip:variables:loaded")
     LibEvent:trigger("ROTHTOOLTIP_GENERAL_INIT")
-    SetupTooltipFonts()
 end
 
 local M = {}
 
 function M:Init()
     self.cbAddonLoaded = function(_, name)
-        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("General") then return end
         if name == "RothTooltip" then InitOnce() end
+        if addon.__RT_GeneralInitialized then
+            SetupStatusBar()
+            SetupItemRefCloseButton()
+        end
     end
 
-    self.cbClearedHide = function(_, tip)
-        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("General") then return end
-        if not addon:IsTooltipSafe(tip) then return end
+    self.cbRestriction = function()
+        if addon.__RT_GeneralInitialized then SetupStatusBar() end
+    end
+
+    self.cbClear = function(_, tooltip)
+        if not addon:IsTooltipSafe(tooltip) then return end
         local general = addon.db and addon.db.general
         if type(general) ~= "table" then return end
 
-        LibEvent:trigger("tooltip.style.border.color", tip, unpack(general.borderColor))
-        LibEvent:trigger("tooltip.style.background", tip, unpack(general.background))
-
-        local factionIcon = addon:SafeGet(tip, "BigFactionIcon")
+        if type(general.borderColor) == "table" then
+            LibEvent:trigger("tooltip.style.border.color", tooltip, unpack(general.borderColor))
+        end
+        if type(general.background) == "table" then
+            LibEvent:trigger("tooltip.style.background", tooltip, unpack(general.background))
+        end
+        local factionIcon = addon:GetBigFactionIcon(tooltip, false)
         if addon:IsObjectAccessible(factionIcon) then addon:SafeMethod(factionIcon, "Hide") end
-
-        local nineSlice = addon:SafeGet(tip, "NineSlice")
-        if addon:IsObjectAccessible(nineSlice) then addon:SafeMethod(nineSlice, "Hide") end
     end
 
-    self.cbShow = function(_, tip)
-        if addon.MM and addon.MM.IsEnabled and not addon.MM:IsEnabled("General") then return end
-        if tip ~= GameTooltip then return end
+    self.cbShow = function(_, tooltip)
+        if tooltip ~= GameTooltip then return end
         local general = addon.db and addon.db.general
-        if type(general) ~= "table" then return end
-
-        LibEvent:trigger(
-            "tooltip.statusbar.position",
-            general.statusbarPosition,
-            general.statusbarOffsetX,
-            general.statusbarOffsetY
-        )
+        if type(general) == "table" then
+            LibEvent:trigger("tooltip.statusbar.position", general.statusbarPosition,
+                general.statusbarOffsetX, general.statusbarOffsetY)
+        end
     end
 end
 
 function M:Enable()
-    if not addon.MM or not addon.MM.AttachEvent then return end
     addon.MM:AttachEvent("General", "ADDON_LOADED", self.cbAddonLoaded, "ADDON_LOADED")
-    addon.MM:AttachTrigger("General", "tooltip:cleared, tooltip:hide", self.cbClearedHide, "tooltip:cleared/hide")
+    addon.MM:AttachEvent("General", "ADDON_RESTRICTION_STATE_CHANGED, PLAYER_REGEN_ENABLED",
+        self.cbRestriction, "restriction-change")
+    addon.MM:AttachTrigger("General", "tooltip:cleared, tooltip:hide", self.cbClear, "tooltip:clear")
     addon.MM:AttachTrigger("General", "tooltip:show", self.cbShow, "tooltip:show")
 end
 
@@ -359,6 +355,4 @@ function M:Disable() end
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
 
-if addon.MM and addon.MM.RegisterModule then
-    addon.MM:RegisterModule("General", M)
-end
+addon.MM:RegisterModule("General", M)
