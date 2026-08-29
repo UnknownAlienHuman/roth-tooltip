@@ -1,11 +1,10 @@
--- RothTooltip patch-stable shared core.
+-- RothTooltip patch-stable shared helpers.
 --
--- This file owns formatting, default merging, media lookup, color/filter
--- functions, and named presentation triggers. Tooltip data, frame registry,
--- style state, profiles, and module lifecycle are owned elsewhere.
+-- Core owns formatting, media lookup, color functions, and element filters.
+-- Tooltip data, frame registry, style, anchoring, status bar, profiles, and
+-- module lifecycle have dedicated owners and must not be reintroduced here.
 
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 local LibMedia = LibStub:GetLibrary("LibSharedMedia-3.0", true)
 
 local MALE = MALE
@@ -50,69 +49,38 @@ addon.bgs = {
     RothTooltipDarkTexture = "Interface\\AddOns\\RothTooltip\\texture\\RothTooltipDarkTexture",
 }
 
-local function AutoValidateElements(source, destination)
-    local known = {}
-    for rowIndex, row in ipairs(destination) do
-        known[rowIndex] = true
-        if type(row) == "table" then
-            for index = #row, 1, -1 do
-                local key = row[index]
-                if source[key] == nil then table.remove(row, index) else known[key] = true end
-            end
-        end
-    end
-
-    for key, value in pairs(source) do
-        if type(key) ~= "number" and destination[key] == nil then
-            destination[key] = value
-            if key ~= "factionBig" and key ~= "npcTitle" and not known[key]
-                and type(destination[1]) == "table" then
-                table.insert(destination[1], 1, key)
-            end
-        end
-    end
-    return destination
-end
-
-function addon:FixNumericKey(tbl, seen)
-    if type(tbl) ~= "table" then return tbl end
+local function DeepCopy(value, seen)
+    if type(value) ~= "table" then return value end
     seen = seen or {}
-    if seen[tbl] then return tbl end
-    seen[tbl] = true
-
-    local converted = {}
-    for key, value in pairs(tbl) do
-        if type(key) == "string" and string.match(key, "^[1-9]%d*$") then
-            tbl[key] = nil
-            converted[tonumber(key)] = value
-        end
-    end
-    for key, value in pairs(converted) do
-        if tbl[key] == nil then tbl[key] = value end
-    end
-    for key, value in pairs(tbl) do
-        if type(value) == "table" then tbl[key] = self:FixNumericKey(value, seen) end
-    end
-    return tbl
+    if seen[value] then return seen[value] end
+    local result = {}
+    seen[value] = result
+    for key, child in pairs(value) do result[DeepCopy(key, seen)] = DeepCopy(child, seen) end
+    return result
 end
 
-function addon:MergeVariable(source, destination)
-    if type(source) ~= "table" then return destination end
-    if type(destination) ~= "table" then destination = {} end
+-- Compatibility entrypoints retained for old profile/import callers. Their
+-- implementation is detached and delegates to Engine/Schema once available.
+function addon:FixNumericKey(value)
+    if type(self.NormalizeNumericKeys) == "function" then
+        return self:NormalizeNumericKeys(value)
+    end
+    return value
+end
 
-    destination.version = source.version
-    for key, value in pairs(source) do
-        if destination[key] == nil then
-            destination[key] = value
-        elseif type(value) == "table" and type(destination[key]) == "table" then
-            if key == "elements" then
-                destination[key] = AutoValidateElements(value, destination[key])
-            else
-                self:MergeVariable(value, destination[key])
-            end
+function addon:MergeVariable(defaults, stored)
+    if type(self.BuildProfile) == "function" then
+        return self:BuildProfile(stored, defaults)
+    end
+    if type(defaults) ~= "table" then return DeepCopy(stored) end
+    local result = DeepCopy(defaults)
+    if type(stored) ~= "table" then return result end
+    for key, value in pairs(stored) do
+        if result[key] ~= nil and type(result[key]) == type(value) then
+            result[key] = type(value) == "table" and self:MergeVariable(result[key], value) or value
         end
     end
-    return destination
+    return result
 end
 
 local function ClampByte(value)
@@ -136,21 +104,19 @@ end
 
 function addon:GetRGBColor(hex)
     if type(hex) ~= "string" then return 1, 1, 1 end
-    hex = string.gsub(hex, "^#", "")
-    if string.match(hex, "^%x%x%x%x%x%x%x%x$") then hex = string.sub(hex, 3, 8) end
-    if not string.match(hex, "^%x%x%x%x%x%x$") then return 1, 1, 1 end
-
-    return (tonumber(string.sub(hex, 1, 2), 16) or 255) / 255,
-        (tonumber(string.sub(hex, 3, 4), 16) or 255) / 255,
-        (tonumber(string.sub(hex, 5, 6), 16) or 255) / 255
+    hex = hex:gsub("^#", "")
+    if hex:match("^%x%x%x%x%x%x%x%x$") then hex = hex:sub(3, 8) end
+    if not hex:match("^%x%x%x%x%x%x$") then return 1, 1, 1 end
+    return (tonumber(hex:sub(1, 2), 16) or 255) / 255,
+        (tonumber(hex:sub(3, 4), 16) or 255) / 255,
+        (tonumber(hex:sub(5, 6), 16) or 255) / 255
 end
 
 function addon:GetFont(font, defaultFont)
     if font == "default" then
         font = defaultFont
     elseif type(font) == "string" and _G[font] then
-        local object = _G[font]
-        local resolved = self:SafeMethod(object, "GetFont")
+        local resolved = self:SafeMethod(_G[font], "GetFont")
         if type(resolved) == "string" then font = resolved end
     elseif type(font) == "string" and LibMedia and LibMedia:IsValid("font", font) then
         local ok, resolved = pcall(LibMedia.Fetch, LibMedia, "font", font)
@@ -183,8 +149,9 @@ function addon:GetGender(gender)
 end
 
 function addon:GetNpcTitle(tooltip)
-    local line, index = self:FindLine(tooltip, "^" .. LEVEL)
-    if not line or type(index) ~= "number" or index <= 2 then return nil end
+    local lineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.UnitLevel
+    local _, _, levelIndex = type(lineType) == "number" and self:GetRenderedLine(tooltip, lineType) or nil
+    if type(levelIndex) ~= "number" or levelIndex <= 2 then return nil end
     return self:GetLine(tooltip, 2)
 end
 
@@ -196,9 +163,9 @@ function addon:CheckFilter(config, raw)
     if filter == nil or filter == "" or filter == "none" then return true end
     if type(filter) ~= "string" then return false end
 
-    local key = string.match(filter, "^[^:]+") or filter
+    local key = filter:match("^[^:]+") or filter
     local negated
-    key, negated = string.gsub(key, "^not%s+", "")
+    key, negated = key:gsub("^not%s+", "")
     local fn = self.filterfunc and self.filterfunc[key]
     if type(fn) ~= "function" then return true end
 
@@ -221,9 +188,11 @@ function addon:FormatData(value, config, raw)
         if ok and type(hex) == "string" then color = hex end
     end
 
-    local text = self:SafeToString(value, "")
-    local ok, formatted = pcall(string.format, wildcard, text)
-    if not ok or type(formatted) ~= "string" then formatted = text end
+    -- Preserve the original primitive type for %d/%f templates. The legacy
+    -- implementation converted every value to string before string.format,
+    -- making numeric wildcards fail on every locale.
+    local ok, formatted = pcall(string.format, wildcard, value)
+    if not ok or type(formatted) ~= "string" then formatted = self:SafeToString(value, "") end
 
     if color == nil or color == "" or color == "default" or color == "none" then return formatted end
     if type(color) == "table" then color = self:GetHexColor(color) end
@@ -241,7 +210,6 @@ function addon:GetUnitData(unit, elements, raw)
         data[rowIndex] = {}
         local namePosition
         local titlePosition
-
         if type(row) == "table" then
             for _, elementKey in ipairs(row) do
                 local config = elements[elementKey]
@@ -252,7 +220,6 @@ function addon:GetUnitData(unit, elements, raw)
                     local formatted = config.color and config.wildcard
                         and self:FormatData(value, config, raw)
                         or self:SafeToString(value, "")
-
                     if elementKey == "title" and namePosition == #data[rowIndex] and raw.titleIsPrefix then
                         table.insert(data[rowIndex], namePosition, formatted)
                     elseif elementKey == "name" and titlePosition == #data[rowIndex] and not raw.titleIsPrefix then
@@ -264,7 +231,6 @@ function addon:GetUnitData(unit, elements, raw)
             end
         end
     end
-
     for index = #data, 1, -1 do
         if data[index][1] == nil then table.remove(data, index) end
     end
@@ -282,7 +248,6 @@ addon.colorfunc.class = function(raw)
     if type(raw) ~= "table" or type(raw.class) ~= "string" then return WhiteColor() end
     local color = CUSTOM_CLASS_COLORS and CUSTOM_CLASS_COLORS[raw.class]
     if color then return color.r, color.g, color.b, addon:GetHexColor(color) end
-
     local red, green, blue = addon:SafeCall("GetClassColor", GetClassColor, raw.class)
     if type(red) ~= "number" or type(green) ~= "number" or type(blue) ~= "number" then return WhiteColor() end
     return red, green, blue, addon:GetHexColor(red, green, blue)
@@ -292,8 +257,9 @@ addon.colorfunc.level = function(raw)
     local level = type(raw) == "table" and raw.effectiveLevel or nil
     if type(level) ~= "number" or level <= 0 then level = 999 end
     local color = addon:SafeCall("GetCreatureDifficultyColor", GetCreatureDifficultyColor, level)
-    if type(color) ~= "table" then return WhiteColor() end
-    local red, green, blue = addon:SafeGet(color, "r"), addon:SafeGet(color, "g"), addon:SafeGet(color, "b")
+    local red = type(color) == "table" and addon:SafeGet(color, "r") or nil
+    local green = type(color) == "table" and addon:SafeGet(color, "g") or nil
+    local blue = type(color) == "table" and addon:SafeGet(color, "b") or nil
     if type(red) ~= "number" or type(green) ~= "number" or type(blue) ~= "number" then return WhiteColor() end
     return red, green, blue, addon:GetHexColor(red, green, blue)
 end
@@ -367,156 +333,4 @@ addon.filterfunc.sameguild = function(raw)
     if type(raw) ~= "table" then return false end
     local name, _, _, realm = addon:SafeCall("GetGuildInfo", GetGuildInfo, "player")
     return type(name) == "string" and name == raw.guildName and realm == raw.guildRealm
-end
-
-LibEvent:attachTrigger("tooltip.scale", function(_, frame, scale)
-    if addon:IsTooltipSafe(frame) and type(scale) == "number" then addon:SafeMethod(frame, "SetScale", scale) end
-end)
-
-LibEvent:attachTrigger("tooltip.anchor.cursor", function(_, frame, parent)
-    if addon:IsTooltipSafe(frame) and addon:IsObjectAccessible(parent) then
-        addon:SafeMethod(frame, "SetOwner", parent, "ANCHOR_CURSOR")
-    end
-end)
-
-LibEvent:attachTrigger("tooltip.anchor.cursor.right", function(_, frame, parent, offsetX, offsetY)
-    if addon:IsTooltipSafe(frame) and addon:IsObjectAccessible(parent) then
-        addon:SafeMethod(frame, "SetOwner", parent, "ANCHOR_CURSOR_RIGHT",
-            tonumber(offsetX) or 36, tonumber(offsetY) or -12)
-    end
-end)
-
-LibEvent:attachTrigger("tooltip.anchor.static", function(_, frame, parent, offsetX, offsetY, anchorPoint)
-    if not addon:IsTooltipSafe(frame) then return end
-    local _, relativeTo = addon:SafeMethod(frame, "GetPoint")
-    if relativeTo ~= UIParent and relativeTo ~= GameTooltipDefaultContainer then return end
-
-    anchorPoint = type(anchorPoint) == "string" and anchorPoint or "BOTTOMRIGHT"
-    addon:SafeMethod(frame, "ClearAllPoints")
-    addon:SafeMethod(frame, "SetPoint", anchorPoint, UIParent, anchorPoint,
-        tonumber(offsetX) or (-CONTAINER_OFFSET_X - 13), tonumber(offsetY) or CONTAINER_OFFSET_Y)
-end)
-
-LibEvent:attachTrigger("tooltip.anchor.none", function(_, frame, parent)
-    if not addon:IsTooltipSafe(frame) or not addon:IsObjectAccessible(parent) then return end
-    addon:SafeMethod(frame, "SetOwner", parent, "ANCHOR_NONE")
-    addon:SafeMethod(frame, "Hide")
-end)
-
-LibEvent:attachTrigger("tooltip.statusbar.height", function(_, height)
-    if addon:IsObjectAccessible(GameTooltipStatusBar) then
-        addon:SafeMethod(GameTooltipStatusBar, "SetHeight", tonumber(height) or 12)
-    end
-end)
-
-LibEvent:attachTrigger("tooltip.statusbar.font", function(_, font, size, flag)
-    local text = type(addon.GetStatusBarText) == "function" and addon:GetStatusBarText(GameTooltipStatusBar) or nil
-    if not addon:IsObjectAccessible(text) then return end
-    local _, originalSize, originalFlag = addon:SafeMethod(text, "GetFont")
-    local defaultFont = addon:IsObjectAccessible(NumberFontNormal)
-        and addon:SafeMethod(NumberFontNormal, "GetFont") or nil
-    font = addon:GetFont(font, defaultFont)
-    flag = addon:NormalizeFontFlag(flag == "default" and "THINOUTLINE" or flag, "THINOUTLINE")
-    size = tonumber(size) or originalSize
-    if type(font) == "string" and type(size) == "number" then
-        addon:SafeMethod(text, "SetFont", font, size, flag or originalFlag)
-    end
-end)
-
-LibEvent:attachTrigger("tooltip.statusbar.texture", function(_, value)
-    if addon:IsObjectAccessible(GameTooltipStatusBar) then
-        addon:SafeMethod(GameTooltipStatusBar, "SetStatusBarTexture", addon:GetBarFile(value))
-    end
-end)
-
-LibEvent:attachTrigger("tooltip.statusbar.position", function(_, position, offsetX, offsetY)
-    if not addon:IsTooltipSafe(GameTooltip) or not addon:IsObjectAccessible(GameTooltipStatusBar) then return end
-    LibEvent:trigger("tooltip.style.init", GameTooltip)
-    local style = addon:GetTooltipStyle(GameTooltip)
-    if not style then return end
-
-    addon:SafeMethod(style, "ClearAllPoints")
-    addon:SafeMethod(GameTooltipStatusBar, "ClearAllPoints")
-    local backdrop = addon:SafeMethod(style, "GetBackdrop")
-    if type(backdrop) ~= "table" then return end
-    if addon:SafeMethod(GameTooltipStatusBar, "IsShown") ~= true then position = "" end
-    offsetX, offsetY = tonumber(offsetX), tonumber(offsetY)
-
-    if position == "bottom" then
-        local offset = backdrop.edgeFile == DEFAULT_BORDER and 5 or (tonumber(backdrop.edgeSize) or 1) + 1
-        offsetX = offsetX and offsetX ~= 0 and offsetX or offset
-        offsetY = offsetY and offsetY ~= 0 and offsetY or -offset
-        addon:SafeMethod(GameTooltipStatusBar, "SetPoint", "TOPLEFT", GameTooltip, "BOTTOMLEFT", offsetX, 2)
-        addon:SafeMethod(GameTooltipStatusBar, "SetPoint", "TOPRIGHT", GameTooltip, "BOTTOMRIGHT", -offsetX, 2)
-        addon:SafeMethod(style, "SetPoint", "TOPLEFT")
-        addon:SafeMethod(style, "SetPoint", "BOTTOMRIGHT", GameTooltipStatusBar, "BOTTOMRIGHT", offsetX, offsetY)
-    elseif position == "top" then
-        local offset = backdrop.edgeFile == DEFAULT_BORDER and 4 or tonumber(backdrop.edgeSize) or 1
-        offsetX = offsetX and offsetX ~= 0 and offsetX or offset
-        offsetY = offsetY and offsetY ~= 0 and offsetY or offset
-        addon:SafeMethod(GameTooltipStatusBar, "SetPoint", "BOTTOMLEFT", GameTooltip, "TOPLEFT", offsetX, -4)
-        addon:SafeMethod(GameTooltipStatusBar, "SetPoint", "BOTTOMRIGHT", GameTooltip, "TOPRIGHT", -offsetX, -4)
-        addon:SafeMethod(style, "SetPoint", "TOPLEFT", GameTooltipStatusBar, "TOPLEFT", -offsetX, offsetY)
-        addon:SafeMethod(style, "SetPoint", "BOTTOMRIGHT")
-    else
-        local offset = backdrop.edgeFile == DEFAULT_BORDER and 2 or 0
-        addon:SafeMethod(GameTooltipStatusBar, "SetPoint", "TOPLEFT", GameTooltip, "BOTTOMLEFT", offset, -1)
-        addon:SafeMethod(GameTooltipStatusBar, "SetPoint", "TOPRIGHT", GameTooltip, "BOTTOMRIGHT", -offset, -1)
-        addon:SafeMethod(style, "SetAllPoints")
-    end
-end)
-
-local function HookBackdropFunction(functionName)
-    if type(hooksecurefunc) ~= "function" or type(_G[functionName]) ~= "function" then return end
-    hooksecurefunc(functionName, function(tooltip)
-        if not addon:IsManagedTooltip(tooltip) then return end
-        local ok, errorMessage = pcall(addon.ApplyGeneralStyleToTooltip, addon, tooltip)
-        if not ok and addon.DoctorLog then
-            addon:DoctorLog("lua", "backdrop-hook:" .. functionName, errorMessage, nil)
-        end
-    end)
-end
-
-HookBackdropFunction("SharedTooltip_SetBackdropStyle")
-HookBackdropFunction("GameTooltip_SetBackdropStyle")
-
-local function ApplyGeneralInitialization()
-    local general = addon.db and addon.db.general
-    if type(general) ~= "table" then return end
-
-    LibEvent:trigger("tooltip.style.font.header", GameTooltip,
-        general.headerFont, general.headerFontSize, general.headerFontFlag)
-    LibEvent:trigger("tooltip.style.font.body", GameTooltip,
-        general.bodyFont, general.bodyFontSize, general.bodyFontFlag)
-    LibEvent:trigger("tooltip.statusbar.height", general.statusbarHeight)
-    LibEvent:trigger("tooltip.statusbar.font", general.statusbarFont,
-        general.statusbarFontSize, general.statusbarFontFlag)
-    LibEvent:trigger("tooltip.statusbar.texture", general.statusbarTexture)
-
-    if type(addon.ForEachManagedTooltip) ~= "function" then return end
-    addon:ForEachManagedTooltip(function(tooltip)
-        LibEvent:trigger("tooltip.style.init", tooltip)
-        LibEvent:trigger("tooltip.scale", tooltip, general.scale)
-        LibEvent:trigger("tooltip.style.mask", tooltip, general.mask)
-        LibEvent:trigger("tooltip.style.bgfile", tooltip, general.bgfile)
-        LibEvent:trigger("tooltip.style.border.corner", tooltip, general.borderCorner)
-        LibEvent:trigger("tooltip.style.border.size", tooltip, general.borderSize)
-        if type(general.borderColor) == "table" then
-            LibEvent:trigger("tooltip.style.border.color", tooltip, unpack(general.borderColor))
-        end
-        if type(general.background) == "table" then
-            LibEvent:trigger("tooltip.style.background", tooltip, unpack(general.background))
-        end
-    end)
-end
-
-LibEvent:attachTrigger("ROTHTOOLTIP_GENERAL_INIT", ApplyGeneralInitialization)
-LibEvent:attachTrigger("tooltip:show", function(_, tooltip)
-    addon:ApplyGeneralStyleToTooltip(tooltip)
-end)
-
-if type(hooksecurefunc) == "function" and type(GameTooltip_SetDefaultAnchor) == "function" then
-    hooksecurefunc("GameTooltip_SetDefaultAnchor", function(tooltip, parent)
-        LibEvent:trigger("tooltip:anchor", tooltip, parent)
-    end)
 end
