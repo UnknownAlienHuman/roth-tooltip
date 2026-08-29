@@ -1,8 +1,9 @@
 -- RothTooltip visual owner for Retail 12.1.
 --
--- All bookkeeping lives in weak addon tables. Blizzard tooltip methods are not
--- replaced, potentially restricted GetRegions() results are not enumerated, and
--- new visual children are never created during combat.
+-- Bookkeeping lives in addon-owned weak tables. Blizzard tooltip methods are
+-- never replaced, GetRegions() is not enumerated, and addon visual children are
+-- never created during combat. When an optional tooltip leaves the registry,
+-- the exact known Blizzard regions that were visible are restored.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
@@ -17,12 +18,14 @@ local ROTH_FRAME = "Interface\\AddOns\\RothTooltip\\texture\\RothTooltipDarkFram
 local StyleByTooltip = setmetatable({}, { __mode = "k" })
 local FactionIconByTooltip = setmetatable({}, { __mode = "k" })
 local HookStateByTooltip = setmetatable({}, { __mode = "k" })
-local VisualsHiddenByTooltip = setmetatable({}, { __mode = "k" })
+local NativeStateByTooltip = setmetatable({}, { __mode = "k" })
 
 addon.TYPE_NAME = {}
 if Enum and type(Enum.TooltipDataType) == "table" then
     for name, typeID in pairs(Enum.TooltipDataType) do
-        if type(name) == "string" and type(typeID) == "number" then addon.TYPE_NAME[typeID] = name end
+        if type(name) == "string" and type(typeID) == "number" then
+            addon.TYPE_NAME[typeID] = name
+        end
     end
 end
 
@@ -30,15 +33,76 @@ local function Accessible(object)
     return addon:IsObjectAccessible(object)
 end
 
-local function Hide(object)
-    if Accessible(object) then addon:SafeMethod(object, "Hide") end
-end
-
 local function CanCreateVisual(parent)
     if InCombatLockdown() or not addon:IsTooltipSafe(parent) then return false end
     local aspect = Enum and Enum.ForbiddenAspect and Enum.ForbiddenAspect.ChangeParent
     if type(aspect) == "number" and addon:HasForbiddenAspects(parent, aspect) then return false end
     return true
+end
+
+local function NativeState(tooltip)
+    local state = NativeStateByTooltip[tooltip]
+    if type(state) ~= "table" then
+        state = { regions = setmetatable({}, { __mode = "k" }), hidden = false }
+        NativeStateByTooltip[tooltip] = state
+    end
+    return state
+end
+
+local function CaptureAndHide(region, state)
+    if not Accessible(region) or type(state) ~= "table" then return end
+    local shown = addon:SafeMethod(region, "IsShown") == true
+    if shown or state.regions[region] == nil then state.regions[region] = shown end
+    addon:SafeMethod(region, "Hide")
+end
+
+local KNOWN_VISUAL_MEMBERS = {
+    "NineSlice", "Center", "TopEdge", "BottomEdge", "LeftEdge", "RightEdge",
+    "TopLeftCorner", "TopRightCorner", "BottomLeftCorner", "BottomRightCorner",
+    "TopOverlay", "BottomOverlay", "LeftOverlay", "RightOverlay",
+    "Background", "Bg", "Border", "BackdropFrame", "Backdrop",
+}
+
+local NESTED_VISUAL_MEMBERS = {
+    "Tooltip", "ItemTooltip", "FollowerTooltip", "BackdropFrame", "Backdrop",
+}
+
+local function CaptureKnownMembers(frame, state)
+    if not Accessible(frame) then return end
+    for _, member in ipairs(KNOWN_VISUAL_MEMBERS) do
+        CaptureAndHide(addon:SafeGet(frame, member), state)
+    end
+end
+
+local function HideBlizzardVisuals(tooltip)
+    if not addon:IsManagedTooltip(tooltip) then return end
+    local state = NativeState(tooltip)
+    if state.hidden then return end
+
+    CaptureKnownMembers(tooltip, state)
+    for _, member in ipairs(NESTED_VISUAL_MEMBERS) do
+        CaptureKnownMembers(addon:SafeGet(tooltip, member), state)
+    end
+
+    local getBackdropTexture = addon:SafeGet(tooltip, "GetBackdropTexture")
+    if type(getBackdropTexture) == "function" then
+        CaptureAndHide(addon:SafeCall("GetBackdropTexture:bg", getBackdropTexture, tooltip, "bg"), state)
+        CaptureAndHide(addon:SafeCall("GetBackdropTexture:border", getBackdropTexture, tooltip, "border"), state)
+    end
+
+    -- Do not disable the entire BACKGROUND draw layer. It has no ownership
+    -- metadata and cannot be restored safely for arbitrary third-party frames.
+    state.hidden = true
+end
+
+local function RestoreBlizzardVisuals(tooltip)
+    local state = NativeStateByTooltip[tooltip]
+    if type(state) ~= "table" then return end
+
+    for region, wasShown in pairs(state.regions) do
+        if wasShown == true and Accessible(region) then addon:SafeMethod(region, "Show") end
+    end
+    NativeStateByTooltip[tooltip] = nil
 end
 
 function addon:GetTooltipStyle(tooltip)
@@ -57,9 +121,9 @@ function addon:GetBigFactionIcon(tooltip, create)
 
     local identity = self:SafeGet(tooltip, "identity")
     if tooltip ~= GameTooltip and identity ~= "diy" then return nil end
+
     icon = self:SafeMethod(tooltip, "CreateTexture", nil, "OVERLAY")
     if not Accessible(icon) then return nil end
-
     self:SafeMethod(icon, "SetPoint", "TOPRIGHT", tooltip, "TOPRIGHT", 18, 0)
     self:SafeMethod(icon, "SetBlendMode", "ADD")
     self:SafeMethod(icon, "SetScale", 0.24)
@@ -81,44 +145,11 @@ function addon:ResetTooltipStyleFrame(tooltip)
 end
 
 function addon:ReleaseTooltipStyle(tooltip)
-    VisualsHiddenByTooltip[tooltip] = nil
+    RestoreBlizzardVisuals(tooltip)
     local style = StyleByTooltip[tooltip]
     if Accessible(style) then self:SafeMethod(style, "Hide") end
     local icon = FactionIconByTooltip[tooltip]
     if Accessible(icon) then self:SafeMethod(icon, "Hide") end
-end
-
-local KNOWN_VISUAL_MEMBERS = {
-    "NineSlice", "Center", "TopEdge", "BottomEdge", "LeftEdge", "RightEdge",
-    "TopLeftCorner", "TopRightCorner", "BottomLeftCorner", "BottomRightCorner",
-    "TopOverlay", "BottomOverlay", "LeftOverlay", "RightOverlay",
-    "Background", "Bg", "Border", "BackdropFrame", "Backdrop",
-}
-
-local NESTED_VISUAL_MEMBERS = {
-    "Tooltip", "ItemTooltip", "FollowerTooltip", "BackdropFrame", "Backdrop",
-}
-
-local function HideKnownMembers(frame)
-    if not Accessible(frame) then return end
-    for _, member in ipairs(KNOWN_VISUAL_MEMBERS) do Hide(addon:SafeGet(frame, member)) end
-end
-
-local function HideBlizzardVisuals(tooltip)
-    if VisualsHiddenByTooltip[tooltip] or not addon:IsManagedTooltip(tooltip) then return end
-    HideKnownMembers(tooltip)
-    for _, member in ipairs(NESTED_VISUAL_MEMBERS) do HideKnownMembers(addon:SafeGet(tooltip, member)) end
-
-    local getBackdropTexture = addon:SafeGet(tooltip, "GetBackdropTexture")
-    if type(getBackdropTexture) == "function" then
-        local background = addon:SafeCall("GetBackdropTexture:bg", getBackdropTexture, tooltip, "bg")
-        Hide(background)
-        local border = addon:SafeCall("GetBackdropTexture:border", getBackdropTexture, tooltip, "border")
-        Hide(border)
-    end
-
-    addon:SafeMethod(tooltip, "DisableDrawLayer", "BACKGROUND")
-    VisualsHiddenByTooltip[tooltip] = true
 end
 
 local function CreateBorder(parent, drawLayer)
@@ -237,7 +268,8 @@ local function InstallStyleMethods(style)
         LayoutBorder(self, self.border, backdrop.edgeSize)
         LayoutBorder(self.inside, self.inside and self.inside.border, 1)
         LayoutBorder(self.outside, self.outside and self.outside.border, 1)
-        SetBorderTexture(self.border, type(backdrop.edgeFile) == "string" and backdrop.edgeFile or WHITE_TEXTURE)
+        SetBorderTexture(self.border,
+            type(backdrop.edgeFile) == "string" and backdrop.edgeFile or WHITE_TEXTURE)
 
         if self.useRothBackground then
             addon:SafeMethod(self.bg, "Hide")
@@ -346,7 +378,8 @@ local function InstallTooltipHooks(tooltip)
     HookStateByTooltip[tooltip] = state
 
     HookOne(tooltip, state, "OnShow", function(frame)
-        VisualsHiddenByTooltip[frame] = nil
+        local native = NativeStateByTooltip[frame]
+        if native then native.hidden = false end
         LibEvent:trigger("tooltip:show", frame)
     end)
     HookOne(tooltip, state, "OnHide", function(frame)
@@ -390,7 +423,8 @@ LibEvent:attachTrigger("tooltip.style.background", function(_, tooltip, red, gre
     local style = EnsureStyle(tooltip)
     if not style then return end
     local currentRed, currentGreen, currentBlue = style:GetBackdropColor()
-    red, green, blue = tonumber(red) or currentRed, tonumber(green) or currentGreen, tonumber(blue) or currentBlue
+    red, green, blue = tonumber(red) or currentRed, tonumber(green) or currentGreen,
+        tonumber(blue) or currentBlue
     alpha = tonumber(alpha) or 0.9
     style.lastBackgroundColor = { red, green, blue, alpha }
     style:SetBackdropColor(red, green, blue, alpha)
@@ -521,7 +555,8 @@ end
 
 local function OnBackdropChanged(tooltip)
     if not addon:IsManagedTooltip(tooltip) then return end
-    VisualsHiddenByTooltip[tooltip] = nil
+    local state = NativeState(tooltip)
+    state.hidden = false
     addon:ApplyGeneralStyleToTooltip(tooltip)
 end
 
