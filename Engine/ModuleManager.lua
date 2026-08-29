@@ -1,9 +1,9 @@
--- RothTooltip Engine: event bus and module lifecycle owner.
+-- RothTooltip event bus and module lifecycle owner.
 --
--- One layer owns native event registration, custom trigger subscriptions,
--- callback attribution, and module enable/disable cleanup. Optional modules are
--- not attached until General has selected and migrated the active SavedVariables
--- store, preventing disabled modules from installing irreversible hooks.
+-- Native event registration, custom triggers, callback attribution, and module
+-- attach/detach are centralized here. Optional modules are attached only after
+-- General selects the active SavedVariables store. Failed Init/Enable calls do
+-- not leave a module marked attached and all registered links are rolled back.
 
 local _, addon = ...
 
@@ -12,10 +12,14 @@ LibStub = LibStub or {
     NewLibrary = function(self, name) self[name] = self[name] or {}; return self[name] end,
 }
 
-local MAJOR, MINOR = "LibEvent.7000", 4
-local lib = LibStub:NewLibrary(MAJOR, MINOR)
-if not lib then lib = LibStub:GetLibrary(MAJOR) end
+local MAJOR, MINOR = "LibEvent.7000", 5
+local lib = LibStub:NewLibrary(MAJOR, MINOR) or LibStub:GetLibrary(MAJOR)
 if not lib then return end
+
+local function WeakKeys(tbl)
+    tbl = type(tbl) == "table" and tbl or {}
+    return setmetatable(tbl, { __mode = "k" })
+end
 
 local function NewBucket()
     return { items = {}, depth = 0, dirty = false }
@@ -23,8 +27,8 @@ end
 
 lib.events = lib.events or {}
 lib.triggers = lib.triggers or {}
-lib._muteUntil = lib._muteUntil or {}
-lib._errState = lib._errState or {}
+lib._muteUntil = WeakKeys(lib._muteUntil)
+lib._errState = WeakKeys(lib._errState)
 lib._errorSink = lib._errorSink or nil
 
 local frame = lib._frame
@@ -85,6 +89,12 @@ local function BucketRemove(bucket, callback)
     return removed
 end
 
+local function SplitNames(names)
+    local result = {}
+    for name in string.gmatch(names or "", "([^,%s]+)") do result[#result + 1] = name end
+    return result
+end
+
 function lib:SetErrorSink(callback)
     self._errorSink = type(callback) == "function" and callback or nil
     return self
@@ -92,7 +102,6 @@ end
 
 local function CallSafe(kind, eventName, callback, ...)
     if type(callback) ~= "function" then return end
-
     local now = Now()
     local muteUntil = lib._muteUntil[callback]
     if type(muteUntil) == "number" and muteUntil > now then return end
@@ -129,35 +138,33 @@ frame:SetScript("OnEvent", function(_, eventName, ...)
     DispatchBucket(lib.events[eventName], "event", eventName, ...)
 end)
 
-local function SplitNames(names)
-    local result = {}
-    for name in string.gmatch(names or "", "([^,%s]+)") do result[#result + 1] = name end
-    return result
-end
-
 function lib:event(eventName, ...)
     DispatchBucket(self.events[eventName], "event", eventName, ...)
 end
 
 function lib:addEventListener(eventNames, callback)
-    if type(callback) ~= "function" then return self end
+    if type(callback) ~= "function" then return self, false, "callback is not a function" end
+    local allRegistered = true
+    local lastError
 
     for _, eventName in ipairs(SplitNames(eventNames)) do
         local bucket = self.events[eventName]
         if not bucket then
-            bucket = NewBucket()
-            self.events[eventName] = bucket
             local ok, errorMessage = pcall(frame.RegisterEvent, frame, eventName)
-            if not ok then
-                self.events[eventName] = nil
+            if ok then
+                bucket = NewBucket()
+                self.events[eventName] = bucket
+            else
+                allRegistered = false
+                lastError = errorMessage
                 if type(self._errorSink) == "function" then
                     pcall(self._errorSink, "event-register", eventName, errorMessage, callback)
                 end
             end
         end
-        if self.events[eventName] then BucketAdd(self.events[eventName], callback) end
+        if bucket then BucketAdd(bucket, callback) end
     end
-    return self
+    return self, allRegistered, lastError
 end
 
 local function ReleaseEventIfEmpty(eventName)
@@ -188,7 +195,7 @@ function lib:removeEventListener(eventNames, callback)
 end
 
 function lib:addEventListenerOnce(eventName, callback)
-    if type(callback) ~= "function" then return self end
+    if type(callback) ~= "function" then return self, false end
     local wrapper
     wrapper = function(_, ...)
         lib:removeEventListener(eventName, wrapper)
@@ -198,13 +205,13 @@ function lib:addEventListenerOnce(eventName, callback)
 end
 
 function lib:addTriggerListener(triggerNames, callback)
-    if type(callback) ~= "function" then return self end
+    if type(callback) ~= "function" then return self, false end
     for _, triggerName in ipairs(SplitNames(triggerNames)) do
         local bucket = self.triggers[triggerName]
         if not bucket then bucket = NewBucket(); self.triggers[triggerName] = bucket end
         BucketAdd(bucket, callback)
     end
-    return self
+    return self, true
 end
 
 function lib:removeTriggerListener(triggerNames, callback)
@@ -235,7 +242,7 @@ function lib:removeAllTriggers(triggerName)
 end
 
 function lib:addTriggerListenerOnce(triggerName, callback)
-    if type(callback) ~= "function" then return self end
+    if type(callback) ~= "function" then return self, false end
     local wrapper
     wrapper = function(_, ...)
         lib:removeTriggerListener(triggerName, wrapper)
@@ -260,7 +267,7 @@ addon.LibEvent = lib
 addon.MM = addon.MM or {}
 local MM = addon.MM
 
-MM.meta = MM.meta or {}
+MM.meta = WeakKeys(MM.meta)
 MM.state = MM.state or {}
 MM.modules = MM.modules or {}
 MM.links = MM.links or {}
@@ -272,6 +279,7 @@ local function EnsureState(moduleName)
     local state = MM.state[moduleName]
     if type(state) ~= "table" then
         state = {
+            initialized = false,
             enabled = true,
             attached = false,
             calls = 0,
@@ -292,13 +300,21 @@ local function EnsureModulesDB()
     return addon.db.modules
 end
 
-local function AddLink(moduleName, kind, eventName, original, wrapper, hook)
+local function FindLink(moduleName, kind, eventName, original)
     local links = MM.links[moduleName]
-    if type(links) ~= "table" then links = {}; MM.links[moduleName] = links end
+    if type(links) ~= "table" then return nil end
     for index = 1, #links do
         local link = links[index]
-        if link.kind == kind and link.event == eventName and link.original == original then return false end
+        if link.kind == kind and link.event == eventName and link.original == original then
+            return link
+        end
     end
+end
+
+local function AddLink(moduleName, kind, eventName, original, wrapper, hook)
+    if FindLink(moduleName, kind, eventName, original) then return false end
+    local links = MM.links[moduleName]
+    if type(links) ~= "table" then links = {}; MM.links[moduleName] = links end
     links[#links + 1] = {
         kind = kind,
         event = eventName,
@@ -323,6 +339,33 @@ function MM:OnError(callback, errorMessage)
     state.lastHook = metadata.hook
     state.lastAt = Now()
     return metadata.module, metadata.hook
+end
+
+local function LogLifecycleError(moduleName, phase, errorMessage)
+    local state = EnsureState(moduleName)
+    state.errors = state.errors + 1
+    state.lastError = addon:SafeToString(errorMessage, "?")
+    state.lastHook = phase
+    state.lastAt = Now()
+    if addon.DoctorLog then
+        addon:DoctorLog("lua", moduleName .. ":" .. phase, errorMessage, nil)
+    end
+end
+
+local function InvokeModule(moduleName, phase, fn, moduleObject, ...)
+    if type(fn) ~= "function" then return true end
+    local ok, errorMessage = pcall(fn, moduleObject, ...)
+    if not ok then LogLifecycleError(moduleName, phase, errorMessage) end
+    return ok
+end
+
+local function EnsureInitialized(moduleName, moduleObject)
+    local state = EnsureState(moduleName)
+    if state.initialized then return true end
+    if not InvokeModule(moduleName, "Init", moduleObject.Init, moduleObject, addon) then return false end
+    state.initialized = true
+    moduleObject.__rtInitialized = true
+    return true
 end
 
 function MM:IsEnabled(moduleName)
@@ -363,28 +406,37 @@ local function MakeModuleWrapper(moduleName, callback, hook)
 end
 
 function MM:AttachTrigger(moduleName, triggerNames, callback, hook)
-    if type(callback) ~= "function" then return end
+    if type(callback) ~= "function" then error("AttachTrigger callback is not a function", 2) end
     moduleName = tostring(moduleName or "?")
+
     for _, triggerName in ipairs(SplitNames(triggerNames)) do
-        local wrapper = MakeModuleWrapper(moduleName, callback, hook or triggerName)
-        if AddLink(moduleName, "trigger", triggerName, callback, wrapper, hook or triggerName) then
-            lib:attachTrigger(triggerName, wrapper)
+        if not FindLink(moduleName, "trigger", triggerName, callback) then
+            local wrapper = MakeModuleWrapper(moduleName, callback, hook or triggerName)
+            local _, registered = lib:attachTrigger(triggerName, wrapper)
+            if not registered then
+                self.meta[wrapper] = nil
+                error("failed to attach trigger " .. triggerName, 2)
+            end
+            AddLink(moduleName, "trigger", triggerName, callback, wrapper, hook or triggerName)
             self.triggerCounts[triggerName] = (self.triggerCounts[triggerName] or 0) + 1
-        else
-            self.meta[wrapper] = nil
         end
     end
 end
 
 function MM:AttachEvent(moduleName, eventNames, callback, hook)
-    if type(callback) ~= "function" then return end
+    if type(callback) ~= "function" then error("AttachEvent callback is not a function", 2) end
     moduleName = tostring(moduleName or "?")
+
     for _, eventName in ipairs(SplitNames(eventNames)) do
-        local wrapper = MakeModuleWrapper(moduleName, callback, hook or eventName)
-        if AddLink(moduleName, "event", eventName, callback, wrapper, hook or eventName) then
-            lib:attachEvent(eventName, wrapper)
-        else
-            self.meta[wrapper] = nil
+        if not FindLink(moduleName, "event", eventName, callback) then
+            local wrapper = MakeModuleWrapper(moduleName, callback, hook or eventName)
+            local _, registered, errorMessage = lib:attachEvent(eventName, wrapper)
+            if not registered then
+                self.meta[wrapper] = nil
+                error("failed to attach event " .. eventName .. ": "
+                    .. addon:SafeToString(errorMessage, "unknown error"), 2)
+            end
+            AddLink(moduleName, "event", eventName, callback, wrapper, hook or eventName)
         end
     end
 end
@@ -393,6 +445,7 @@ function MM:Detach(moduleName)
     moduleName = tostring(moduleName or "?")
     local links = self.links[moduleName]
     if type(links) ~= "table" then return end
+
     for index = #links, 1, -1 do
         local link = links[index]
         if link.kind == "trigger" then
@@ -409,74 +462,83 @@ function MM:Detach(moduleName)
 end
 
 function MM:RegisterModule(moduleName, moduleObject)
-    if type(moduleName) ~= "string" or moduleName == "" or type(moduleObject) ~= "table" then return end
+    if type(moduleName) ~= "string" or moduleName == "" or type(moduleObject) ~= "table" then return false end
+    local existing = self.modules[moduleName]
+    if existing and existing ~= moduleObject then
+        LogLifecycleError(moduleName, "Register", "duplicate module owner")
+        return false
+    end
+
     self.modules[moduleName] = moduleObject
     self.links[moduleName] = self.links[moduleName] or {}
     local state = EnsureState(moduleName)
-
-    if not moduleObject.__rtInitialized and type(moduleObject.Init) == "function" then
-        moduleObject.__rtInitialized = true
-        addon:SafeCall(moduleName .. ":Init", moduleObject.Init, moduleObject, addon)
-    end
+    if not EnsureInitialized(moduleName, moduleObject) then return false end
 
     if self.core[moduleName] then
-        self:Enable(moduleName, true)
+        local enabled = self:Enable(moduleName, true)
         local db = EnsureModulesDB()
         if db then db[moduleName] = true end
-        return
+        return enabled
     end
 
-    -- Config defaults exist before ADDON_LOADED, but they are not the active
-    -- profile. Attaching here would let a saved-disabled module install
-    -- irreversible hooks before General chooses the real DB.
     if addon.__RT_VariablesLoaded ~= true then
         state.attached = false
-        return
+        return true
     end
 
     local db = EnsureModulesDB()
     if db and db[moduleName] == false then self:Disable(moduleName, true)
     else self:Enable(moduleName, true) end
+    return true
 end
 
 function MM:Enable(moduleName, silent)
     moduleName = tostring(moduleName or "")
-    if moduleName == "" then return end
-    if not self.core[moduleName] and addon.__RT_VariablesLoaded ~= true then return end
+    if moduleName == "" then return false end
+    if not self.core[moduleName] and addon.__RT_VariablesLoaded ~= true then return false end
+
+    local moduleObject = self.modules[moduleName]
+    if type(moduleObject) ~= "table" or not EnsureInitialized(moduleName, moduleObject) then return false end
 
     local state = EnsureState(moduleName)
-    if state.enabled ~= false and state.attached then return end
+    if state.enabled ~= false and state.attached then return true end
+
     state.enabled = true
     local db = EnsureModulesDB()
     if db then db[moduleName] = true end
 
-    local moduleObject = self.modules[moduleName]
-    if moduleObject and type(moduleObject.Enable) == "function" then
-        addon:SafeCall(moduleName .. ":Enable", moduleObject.Enable, moduleObject)
+    if not InvokeModule(moduleName, "Enable", moduleObject.Enable, moduleObject) then
+        self:Detach(moduleName)
+        state.enabled = false
+        state.attached = false
+        return false
     end
+
     state.attached = true
+    return true
 end
 
 function MM:Disable(moduleName, silent)
     moduleName = tostring(moduleName or "")
-    if moduleName == "" then return end
-    if self.core[moduleName] then EnsureState(moduleName).enabled = true return end
+    if moduleName == "" then return false end
+    if self.core[moduleName] then EnsureState(moduleName).enabled = true return false end
 
     local state = EnsureState(moduleName)
-    if state.enabled == false and not state.attached then return end
     state.enabled = false
     local db = EnsureModulesDB()
     if db then db[moduleName] = false end
 
     self:Detach(moduleName)
     local moduleObject = self.modules[moduleName]
-    if moduleObject and type(moduleObject.Disable) == "function" then
-        addon:SafeCall(moduleName .. ":Disable", moduleObject.Disable, moduleObject)
+    if type(moduleObject) == "table" then
+        InvokeModule(moduleName, "Disable", moduleObject.Disable, moduleObject)
     end
+    return true
 end
 
 function MM:Toggle(moduleName)
-    if self:IsEnabled(moduleName) then self:Disable(moduleName) else self:Enable(moduleName) end
+    if self:IsEnabled(moduleName) then return self:Disable(moduleName) end
+    return self:Enable(moduleName)
 end
 
 function MM:ApplySaved()
@@ -506,13 +568,14 @@ function MM:ExportText()
     table.sort(names)
     local output = {
         "RothTooltip Modules",
-        "Name\tEnabled\tAttached\tCalls\tErrors\tLast(ms)\tLastHook\tLastError",
+        "Name\tInit\tEnabled\tAttached\tCalls\tErrors\tLast(ms)\tLastHook\tLastError",
     }
     for _, moduleName in ipairs(names) do
         local state = EnsureState(moduleName)
         output[#output + 1] = string.format(
-            "%s\t%s\t%s\t%d\t%d\t%.1f\t%s\t%s",
+            "%s\t%s\t%s\t%s\t%d\t%d\t%.1f\t%s\t%s",
             moduleName,
+            state.initialized and "1" or "0",
             self:IsEnabled(moduleName) and "1" or "0",
             state.attached and "1" or "0",
             state.calls or 0,
@@ -526,15 +589,15 @@ function MM:ExportText()
 end
 
 function addon:EnableModule(moduleName)
-    if self.MM then self.MM:Enable(moduleName) end
+    return self.MM and self.MM:Enable(moduleName)
 end
 
 function addon:DisableModule(moduleName)
-    if self.MM then self.MM:Disable(moduleName) end
+    return self.MM and self.MM:Disable(moduleName)
 end
 
 function addon:ToggleModule(moduleName)
-    if self.MM then self.MM:Toggle(moduleName) end
+    return self.MM and self.MM:Toggle(moduleName)
 end
 
 lib:attachTrigger("tooltip:variables:loaded", function()
