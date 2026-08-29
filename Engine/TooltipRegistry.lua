@@ -1,8 +1,8 @@
 -- RothTooltip managed-tooltip registry and lifecycle invalidation.
 --
--- This is the sole owner of the managed frame set and cache-driven refresh
--- events. Feature modules consume registered tooltips; they do not maintain
--- parallel frame lists.
+-- This is the sole lifecycle owner of the managed frame set and cache-driven
+-- refresh events. Feature modules may register frames through the public API,
+-- but do not maintain parallel dispatch lists.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
@@ -26,7 +26,19 @@ local LOAD_ON_DEMAND_TOOLTIP_NAMES = {
 }
 
 addon.tooltipSet = addon.tooltipSet or setmetatable({}, { __mode = "k" })
-addon.tooltips = addon.tooltips or setmetatable({}, { __mode = "v" })
+-- Keep a dense compatibility list for the legacy Settings UI while all runtime
+-- iteration uses tooltipSet. Blizzard globals already hold these frames alive.
+addon.tooltips = addon.tooltips or {}
+
+function addon:UnregisterTooltipFrame(tooltip)
+    if not self:IsObjectAccessible(tooltip) or type(self.tooltipSet) ~= "table" then return false end
+    if not self.tooltipSet[tooltip] then return true end
+
+    self.tooltipSet[tooltip] = nil
+    self:SetPrimaryTooltipContext(tooltip, nil)
+    LibEvent:trigger("tooltip:unregister", tooltip)
+    return true
+end
 
 local function RegisterNames(names, notifyExisting)
     for _, name in ipairs(names) do
@@ -35,9 +47,6 @@ local function RegisterNames(names, notifyExisting)
             local alreadyRegistered = addon.tooltipSet[tooltip] == true
             addon:RegisterTooltipFrame(tooltip)
             if alreadyRegistered and notifyExisting == true then
-                -- Re-run idempotent setup after a load-on-demand or restriction
-                -- transition. Style hooks that were temporarily forbidden can
-                -- then be installed without adding a second frame owner.
                 LibEvent:trigger("tooltip:init", tooltip)
             end
         end
