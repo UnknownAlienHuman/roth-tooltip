@@ -38,9 +38,8 @@ local function TrackRenderedLine(tooltip, lineData)
     if lineType == nil or lineIndex == nil or lineIndex < 1 then return end
 
     local lines = GetTooltipLines(tooltip, true)
-    -- The first rendered line marks a new ProcessLines generation. This reset
-    -- does not depend on OnTooltipCleared hooks, which may be temporarily
-    -- forbidden during restriction transitions.
+    -- lineIndex 1 marks a new ProcessLines generation. This does not depend on
+    -- OnTooltipCleared, whose script binding can be temporarily forbidden.
     if lineIndex == 1 or lineIndex < (lines.lastIndex or 0) then
         lines = { lastIndex = 0 }
         LinesByTooltip[tooltip] = lines
@@ -82,6 +81,20 @@ function addon:ClearRenderedLineType(tooltip, lineType)
     end
 end
 
+-- NPC titles have no dedicated TooltipDataLineType. The title is the rendered
+-- line immediately before UnitLevel in Blizzard's current unit tooltip layout.
+-- Keep that layout assumption in the semantic-line owner rather than matching a
+-- translated LEVEL string in feature code.
+function addon:GetNpcTitle(tooltip)
+    local lineTypes = Enum and Enum.TooltipDataLineType
+    local unitLevel = type(lineTypes) == "table" and lineTypes.UnitLevel or nil
+    if type(unitLevel) ~= "number" then return nil end
+
+    local _, _, levelIndex = self:GetRenderedLine(tooltip, unitLevel)
+    if type(levelIndex) ~= "number" or levelIndex <= 2 then return nil end
+    return self:GetLine(tooltip, levelIndex - 1)
+end
+
 local function ClearTooltipLines(_, tooltip)
     if CanAccess(tooltip) and tooltip ~= nil then LinesByTooltip[tooltip] = nil end
 end
@@ -90,8 +103,15 @@ local processor = TooltipDataProcessor
 local addLinePostCall = processor and processor.AddLinePostCall
 local lineTypes = Enum and Enum.TooltipDataLineType
 if type(addLinePostCall) == "function" and type(lineTypes) == "table" then
+    local registered = {}
     for _, lineType in pairs(lineTypes) do
-        if type(lineType) == "number" then pcall(addLinePostCall, lineType, TrackRenderedLine) end
+        if type(lineType) == "number" and not registered[lineType] then
+            registered[lineType] = true
+            local ok, errorMessage = pcall(addLinePostCall, lineType, TrackRenderedLine)
+            if not ok and addon.DoctorLog then
+                addon:DoctorLog("api", "TooltipLines:" .. tostring(lineType), errorMessage, nil)
+            end
+        end
     end
 elseif addon.DoctorLog then
     addon:DoctorLog("api", "TooltipLines", "TooltipDataProcessor.AddLinePostCall unavailable", nil)
