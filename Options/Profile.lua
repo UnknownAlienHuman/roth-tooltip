@@ -3,6 +3,8 @@ local Options = addon.Options
 
 if not Options then return end
 
+local MAX_PROFILE_TEXT_BYTES = 262144
+
 local function PrintMessage(message, errorState)
     local color = errorState and "|cffff3333" or "|cff00ffff"
     print("|cffffe4e1[RothTooltip]|r" .. color .. tostring(message or "") .. "|r")
@@ -11,11 +13,13 @@ end
 local function SerializeProfile()
     if not C_EncodingUtil or type(C_EncodingUtil.SerializeJSON) ~= "function" then return nil end
     local ok, result = pcall(C_EncodingUtil.SerializeJSON, addon.db)
-    if ok and type(result) == "string" then return result end
+    if ok and type(result) == "string" and #result <= MAX_PROFILE_TEXT_BYTES then return result end
 end
 
 local function DeserializeProfile(text)
-    if type(text) ~= "string" or text == "" then return nil end
+    if type(text) ~= "string" then return nil end
+    text = strtrim(text)
+    if text == "" or #text > MAX_PROFILE_TEXT_BYTES then return nil end
     if not C_EncodingUtil or type(C_EncodingUtil.DeserializeJSON) ~= "function" then return nil end
     local ok, result = pcall(C_EncodingUtil.DeserializeJSON, text)
     if ok and type(result) == "table" then return result end
@@ -48,6 +52,7 @@ local function CreateProfileDialog()
     if addon.__RTVariablesDialog and addon:IsObjectAccessible(addon.__RTVariablesDialog) then
         return addon.__RTVariablesDialog
     end
+    if InCombatLockdown() then return nil end
 
     local ok, dialog = pcall(CreateFrame, "Frame", nil, UIParent, "RothTooltipVariablesTemplate")
     if not ok or not addon:IsObjectAccessible(dialog) then return nil end
@@ -68,7 +73,7 @@ local function CreateProfileDialog()
     dialog.export:SetScript("OnClick", function()
         local serialized = SerializeProfile()
         if not serialized then
-            PrintMessage(" JSON export is unavailable.", true)
+            PrintMessage(" JSON export is unavailable or exceeds 256 KiB.", true)
             return
         end
         dialog.textarea.text:SetText(serialized)
@@ -79,7 +84,7 @@ local function CreateProfileDialog()
     dialog.import:SetScript("OnClick", function()
         local data = DeserializeProfile(dialog.textarea.text:GetText())
         if not data or not addon:ImportProfile(data) then
-            PrintMessage(" Invalid profile payload.", true)
+            PrintMessage(" Invalid or oversized profile payload.", true)
             return
         end
         dialog.textarea.text:SetText("")
@@ -95,6 +100,10 @@ local function CreateProfileDialog()
 end
 
 function Options:OpenProfileDialog()
+    if InCombatLockdown() then
+        PrintMessage(" Profile editor cannot be created in combat.", true)
+        return
+    end
     local dialog = CreateProfileDialog()
     if dialog then dialog:Show() end
 end
