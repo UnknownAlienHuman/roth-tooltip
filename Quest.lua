@@ -20,33 +20,31 @@ local function QuestColor(questID)
     return red, green, blue
 end
 
-local function OnGenericID(_, tooltip, label, id, typeID, context)
+local function IsQuestType(typeID)
+    local dataTypes = Enum and Enum.TooltipDataType
+    if type(dataTypes) ~= "table" then return false end
+    return typeID == dataTypes.Quest or typeID == dataTypes.QuestPartyProgress
+end
+
+local function OnGenericID(_, tooltip, _, id, typeID, context)
     local config = addon.db and addon.db.quest
-    if type(config) ~= "table" or config.coloredQuestBorder ~= true then return end
-    if not addon:IsTooltipSafe(tooltip) then return end
+    if type(config) ~= "table" or config.coloredQuestBorder ~= true
+        or not addon:IsTooltipSafe(tooltip) then return end
 
-    local questType = Enum and Enum.TooltipDataType and Enum.TooltipDataType.Quest
-    if type(questType) == "number" then
-        if type(context) ~= "table" or context.type ~= questType then return end
-    elseif label ~= "Quest" then
-        return
+    if type(context) == "table" then
+        id, typeID = context.id, context.type
     end
+    if not IsQuestType(typeID) then return end
 
-    local questID = type(context) == "table" and context.id or id
-    local red, green, blue = QuestColor(questID)
+    local red, green, blue = QuestColor(id)
     if red then LibEvent:trigger("tooltip.style.border.color", tooltip, red, green, blue) end
 end
 
 local M = {}
-
-function M:Init()
-    self.cbGeneric = OnGenericID
-end
-
+function M:Init() self.cbGeneric = OnGenericID end
 function M:Enable()
     addon.MM:AttachTrigger("Quest", "tooltip:genericid", self.cbGeneric, "tooltip:quest")
 end
-
 function M:Disable() end
 function M:OnTooltip(_) end
 function M:OnStyleChanged(_) end
