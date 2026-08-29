@@ -29,9 +29,7 @@ local function CanAccessAllValues(...)
     end
 
     for index = 1, select("#", ...) do
-        if not CanAccessValue(select(index, ...)) then
-            return false
-        end
+        if not CanAccessValue(select(index, ...)) then return false end
     end
     return true
 end
@@ -60,19 +58,22 @@ function addon:SafeToString(value, placeholder)
     if type(value) == "string" then return value end
 
     local ok, text = pcall(tostring, value)
-    if ok and CanAccessValue(text) and type(text) == "string" then
-        return text
-    end
+    if ok and CanAccessValue(text) and type(text) == "string" then return text end
     return placeholder or "??"
 end
 
--- SafeCall accepts only accessible inputs and independently gates each return
--- value before it crosses back into addon code.
+-- Sixteen return slots cover the widest tuples currently consumed by the
+-- addon, including GetSavedInstanceInfo and C_Item.GetItemInfo. Truncating a
+-- tuple at this boundary silently changes API semantics, so the width belongs
+-- to the shared owner rather than to ad-hoc module wrappers.
 function addon:SafeCall(tag, fn, ...)
     if not CanAccessValue(fn) or type(fn) ~= "function" then return nil end
     if not CanAccessAllValues(...) then return nil end
 
-    local ok, r1, r2, r3, r4, r5, r6, r7, r8 = pcall(fn, ...)
+    local ok,
+        r1, r2, r3, r4, r5, r6, r7, r8,
+        r9, r10, r11, r12, r13, r14, r15, r16 = pcall(fn, ...)
+
     if ok then
         if not CanAccessValue(r1) then r1 = nil end
         if not CanAccessValue(r2) then r2 = nil end
@@ -82,7 +83,16 @@ function addon:SafeCall(tag, fn, ...)
         if not CanAccessValue(r6) then r6 = nil end
         if not CanAccessValue(r7) then r7 = nil end
         if not CanAccessValue(r8) then r8 = nil end
-        return r1, r2, r3, r4, r5, r6, r7, r8
+        if not CanAccessValue(r9) then r9 = nil end
+        if not CanAccessValue(r10) then r10 = nil end
+        if not CanAccessValue(r11) then r11 = nil end
+        if not CanAccessValue(r12) then r12 = nil end
+        if not CanAccessValue(r13) then r13 = nil end
+        if not CanAccessValue(r14) then r14 = nil end
+        if not CanAccessValue(r15) then r15 = nil end
+        if not CanAccessValue(r16) then r16 = nil end
+        return r1, r2, r3, r4, r5, r6, r7, r8,
+            r9, r10, r11, r12, r13, r14, r15, r16
     end
 
     if type(self.DoctorLog) == "function" then
@@ -105,9 +115,7 @@ function addon:SafeGet(object, key)
     if not CanAccessValue(object) or object == nil then return nil end
     if not CanAccessValue(key) or key == nil then return nil end
 
-    local ok, value = pcall(function()
-        return object[key]
-    end)
+    local ok, value = pcall(function() return object[key] end)
     if not ok or not CanAccessValue(value) then return nil end
     return value
 end
@@ -118,19 +126,14 @@ function addon:IsObjectAccessible(object)
     local canAccess = self:SafeGet(object, "CanBeAccessedInContext")
     if type(canAccess) == "function" then
         local ok, result = pcall(canAccess, object)
-        if not ok or not CanAccessValue(result) or result ~= true then
-            return false
-        end
+        if not ok or not CanAccessValue(result) or result ~= true then return false end
     end
 
     local isForbidden = self:SafeGet(object, "IsForbidden")
     if type(isForbidden) == "function" then
         local ok, result = pcall(isForbidden, object)
-        if not ok or not CanAccessValue(result) or result == true then
-            return false
-        end
+        if not ok or not CanAccessValue(result) or result == true then return false end
     end
-
     return true
 end
 
