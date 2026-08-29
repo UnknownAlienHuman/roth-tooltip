@@ -25,6 +25,11 @@ local function IsUnitContext(context, unitType)
     return type(context.unitToken) == "string" or type(context.guid) == "string"
 end
 
+local function IsArenaInstance()
+    local inInstance, instanceType = addon:SafeCall("IsInInstance", IsInInstance)
+    return inInstance == true and instanceType == "arena"
+end
+
 local function CheckVisibility(tooltip, context, unitType)
     if not addon:IsTooltipSafe(tooltip) then return false end
     local visibility = addon.db and addon.db.general and addon.db.general.visibility
@@ -40,10 +45,7 @@ local function CheckVisibility(tooltip, context, unitType)
     end
 
     if visibility.inRaid == "hide" and addon:SafeCallBoolean(IsInRaid) == true then return false end
-    if visibility.inArena == "hide"
-        and addon:SafeCallBoolean(C_PvP and C_PvP.IsArena) == true then
-        return false
-    end
+    if visibility.inArena == "hide" and IsArenaInstance() then return false end
     return true
 end
 
@@ -92,14 +94,7 @@ local function CreateUnitDispatcher(unitType)
         local context = Prepare(tooltip, tooltipData, unitType)
         if not IsUnitContext(context, unitType) or not addon:AllowTrigger("unit", tooltip) then return end
         if WantTrigger("tooltip:unit") then
-            LibEvent:trigger(
-                "tooltip:unit",
-                tooltip,
-                context.unitToken,
-                context.guid,
-                unitType,
-                context
-            )
+            LibEvent:trigger("tooltip:unit", tooltip, context.unitToken, context.guid, unitType, context)
         end
     end
 end
@@ -109,8 +104,7 @@ local function CreateAuraDispatcher(unitType)
         local context = Prepare(tooltip, tooltipData, unitType)
         if not ContextHasSpell(context) or not addon:AllowTrigger("aura", tooltip) then return end
         if WantTrigger("tooltip:aura") then
-            -- Preserve the historic trigger arity while never forwarding raw
-            -- AuraData or TooltipData.args.
+            -- Preserve historic trigger arity without forwarding raw AuraData.
             LibEvent:trigger("tooltip:aura", tooltip, nil, context.spellID, context)
         end
     end
@@ -119,6 +113,8 @@ end
 local function CreateActionLikeDispatcher(unitType)
     return function(tooltip, tooltipData)
         local context = Prepare(tooltip, tooltipData, unitType)
+        -- Item evidence is decisive. This preserves item macros and item-backed
+        -- pet/flyout tooltips instead of treating every action-like id as a spell.
         if ContextHasItem(context) then
             if addon:AllowTrigger("item", tooltip) and WantTrigger("tooltip:item") then
                 LibEvent:trigger("tooltip:item", tooltip, context.hyperlink, context)
@@ -145,9 +141,7 @@ local function CreateGenericDispatcher(unitType)
 end
 
 function addon:InitTooltipDataProcessor()
-    if self.__RT_TooltipProcessorInitialized then
-        return self.__RT_TooltipProcessorReady == true
-    end
+    if self.__RT_TooltipProcessorInitialized then return self.__RT_TooltipProcessorReady == true end
     self.__RT_TooltipProcessorInitialized = true
     self.__RT_TooltipProcessorReady = false
 
