@@ -1,8 +1,9 @@
 -- RothTooltip locale normalization.
 --
 -- Legacy locale files replace addon.L with partial tables. This finalizer turns
--- that payload into a validated overlay on a complete enUS runtime base so a
--- missing or stale translation cannot return nil or break string.format.
+-- that payload into a validated overlay on a stable enUS runtime base. Missing
+-- translations fall back to enUS/humanized text; stale removed settings are
+-- rejected instead of re-entering runtime state.
 
 local _, addon = ...
 
@@ -84,12 +85,12 @@ local BASE = {
     ["dropdown.STRICT"] = "STRICT (safest)",
     ["dropdown.BALANCED"] = "BALANCED",
     ["dropdown.AGGRESSIVE"] = "AGGRESSIVE (risk)",
+    ["<Drag element to customize the style>"] = "Drag an element to customize the layout",
 }
 
 local function Humanize(key)
     local leaf = tostring(key or ""):match("([^.]+)$") or tostring(key or "")
-    leaf = leaf:gsub("([a-z])([A-Z])", "%1 %2")
-    leaf = leaf:gsub("_", " ")
+    leaf = leaf:gsub("([a-z])([A-Z])", "%1 %2"):gsub("_", " ")
     return leaf:gsub("^(%a)", string.upper)
 end
 
@@ -112,12 +113,31 @@ local function FormatSignature(text)
     return table.concat(signature, ",")
 end
 
+local function ConfigPathExists(path)
+    if type(path) ~= "string" or type(addon.__RT_DefaultDB) ~= "table" then return false end
+    local value = addon.__RT_DefaultDB
+    for segment in path:gmatch("[^.]+") do
+        if type(value) ~= "table" or value[segment] == nil then return false end
+        value = value[segment]
+    end
+    return true
+end
+
+local function IsKnownLocaleKey(key)
+    if BASE[key] ~= nil or ConfigPathExists(key) then return true end
+    return key:find("^dropdown%.") ~= nil
+        or key:find("^tooltip%.") ~= nil
+        or key:find("^combatPolicy%.desc%.") ~= nil
+        or key == "modules.note"
+        or key == "<Drag element to customize the style>"
+end
+
 local overlay = type(addon.L) == "table" and addon.L or {}
 local locale = {}
 for key, value in pairs(BASE) do locale[key] = value end
 
 for key, value in pairs(overlay) do
-    if type(key) == "string" and type(value) == "string" then
+    if type(key) == "string" and type(value) == "string" and IsKnownLocaleKey(key) then
         local baseValue = BASE[key]
         if baseValue == nil or FormatSignature(value) == FormatSignature(baseValue) then
             locale[key] = value
@@ -145,7 +165,6 @@ function addon:FormatLocalized(key, fallback, ...)
     local formatString = self:Localize(key, fallback)
     local ok, text = pcall(string.format, formatString, ...)
     if ok and type(text) == "string" then return text end
-
     if type(fallback) == "string" and fallback ~= formatString then
         ok, text = pcall(string.format, fallback, ...)
         if ok and type(text) == "string" then return text end
