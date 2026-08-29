@@ -10,8 +10,16 @@ local INSPECT_CACHE_MAX = 64
 local INSPECT_REQUEST_THROTTLE = 2
 local INSPECT_REQUEST_TIMEOUT = 5
 local MYTHIC_PLUS_CACHE_TTL = 60
+local MYTHIC_PLUS_NEGATIVE_TTL = 10
 local MYTHIC_PLUS_CACHE_MAX = 64
 local RAID_CACHE_TTL = 300
+
+local RAID_DIFFICULTY_RANK = {
+    [17] = 1, -- Raid Finder
+    [14] = 2, -- Normal
+    [15] = 3, -- Heroic
+    [16] = 4, -- Mythic
+}
 
 local function CanAccess(value)
     return addon:CanAccessValue(value)
@@ -33,7 +41,6 @@ end
 local function ReadNumber(tbl, key)
     local value = ReadField(tbl, key)
     if type(value) == "number" then return value end
-    return nil
 end
 
 local function IsOrdinaryUnit(unit)
@@ -44,49 +51,44 @@ local function IsOrdinaryUnit(unit)
 end
 
 local function EscapePattern(text)
-    if type(text) ~= "string" then return "" end
-    return (text:gsub("(%W)", "%%%1"))
+    return type(text) == "string" and (text:gsub("(%W)", "%%%1")) or ""
+end
+
+local function Label(key, fallback)
+    return type(addon.Localize) == "function" and addon:Localize(key, fallback)
+        or (addon.L and addon.L[key]) or fallback
 end
 
 local function AddStatLine(tooltip, label, value)
     if not addon:IsTooltipSafe(tooltip) then return end
     if type(label) ~= "string" or label == "" then return end
     if type(value) ~= "string" and type(value) ~= "number" then return end
-
     if addon:FindLine(tooltip, "^" .. EscapePattern(label) .. ":") then return end
-    addon:SafeMethod(
-        tooltip,
-        "AddLine",
-        string.format("%s: |cffffffff%s|r", label, tostring(value)),
-        0,
-        1,
-        0.8
-    )
-end
 
-local mythicPlusCache = {}
+    addon:SafeMethod(tooltip, "AddLine",
+        string.format("%s: |cffffffff%s|r", label, tostring(value)), 0, 1, 0.8)
+end
 
 local function PruneTimedCache(cache, now, ttl, maximum)
     local count = 0
     local oldestKey, oldestTime
     for key, entry in pairs(cache) do
         local entryTime = type(entry) == "table" and entry.time or nil
-        if type(entryTime) ~= "number" or now - entryTime > ttl then
+        local entryTTL = type(entry) == "table" and tonumber(entry.ttl) or ttl
+        if type(entryTime) ~= "number" or now - entryTime > entryTTL then
             cache[key] = nil
         else
             count = count + 1
-            if oldestTime == nil or entryTime < oldestTime then
-                oldestKey = key
-                oldestTime = entryTime
-            end
+            if oldestTime == nil or entryTime < oldestTime then oldestKey, oldestTime = key, entryTime end
         end
     end
     if count >= maximum and oldestKey then cache[oldestKey] = nil end
 end
 
+local mythicPlusCache = {}
+
 local function SanitizeMythicPlusSummary(summary)
     if not CanAccess(summary) or type(summary) ~= "table" then return nil end
-
     local clean = { runs = {} }
     local currentSeasonScore = ReadNumber(summary, "currentSeasonScore")
     if currentSeasonScore ~= nil then clean.currentSeasonScore = currentSeasonScore end
@@ -108,36 +110,35 @@ local function SanitizeMythicPlusSummary(summary)
             end
         end
     end
-
     if clean.currentSeasonScore == nil and #clean.runs == 0 then return nil end
     return clean
 end
 
 local function GetMythicPlusSummary(unit)
-    if not IsOrdinaryUnit(unit) then return nil end
-    if not C_PlayerInfo or type(C_PlayerInfo.GetPlayerMythicPlusRatingSummary) ~= "function" then return nil end
+    if not IsOrdinaryUnit(unit) or not C_PlayerInfo
+        or type(C_PlayerInfo.GetPlayerMythicPlusRatingSummary) ~= "function" then return nil end
 
     local guid = Call(UnitGUID, unit)
     if type(guid) ~= "string" or guid == "" then return nil end
 
     local now = GetTime and GetTime() or 0
     local cached = mythicPlusCache[guid]
-    if type(cached) == "table" and type(cached.time) == "number"
-        and now - cached.time <= MYTHIC_PLUS_CACHE_TTL then
-        return cached.summary
+    if type(cached) == "table" and now - cached.time <= cached.ttl then
+        return cached.summary or nil
     end
 
     PruneTimedCache(mythicPlusCache, now, MYTHIC_PLUS_CACHE_TTL, MYTHIC_PLUS_CACHE_MAX)
     local summary = SanitizeMythicPlusSummary(Call(C_PlayerInfo.GetPlayerMythicPlusRatingSummary, unit))
-    if not summary then return nil end
-
-    mythicPlusCache[guid] = { summary = summary, time = now }
+    mythicPlusCache[guid] = {
+        summary = summary or false,
+        time = now,
+        ttl = summary and MYTHIC_PLUS_CACHE_TTL or MYTHIC_PLUS_NEGATIVE_TTL,
+    }
     return summary
 end
 
 local function GetBestMythicPlusKey(summary)
     if type(summary) ~= "table" or type(summary.runs) ~= "table" then return nil end
-
     local bestLevel, bestMapID, bestScore
     for _, run in ipairs(summary.runs) do
         local level = type(run) == "table" and run.bestRunLevel or nil
@@ -148,9 +149,7 @@ local function GetBestMythicPlusKey(summary)
             if not replace and level == bestLevel and type(score) == "number" then
                 replace = bestScore == nil or score > bestScore
             end
-            if replace then
-                bestLevel, bestMapID, bestScore = level, mapID, score
-            end
+            if replace then bestLevel, bestMapID, bestScore = level, mapID, score end
         end
     end
     if bestLevel == nil then return nil end
@@ -169,16 +168,14 @@ local raidProgressCacheTime = 0
 
 local function PreferRaidEntry(previous, difficultyID, encounterProgress)
     if not previous then return true end
-    if type(difficultyID) == "number" and type(previous.difficultyID) == "number"
-        and difficultyID ~= previous.difficultyID then
-        return difficultyID > previous.difficultyID
-    end
+    local newRank = RAID_DIFFICULTY_RANK[difficultyID] or 0
+    local oldRank = RAID_DIFFICULTY_RANK[previous.difficultyID] or 0
+    if newRank ~= oldRank then return newRank > oldRank end
     return encounterProgress > previous.encounterProgress
 end
 
 local function GetSavedRaidProgress()
     if type(GetNumSavedInstances) ~= "function" or type(GetSavedInstanceInfo) ~= "function" then return nil end
-
     local now = GetTime and GetTime() or 0
     if type(raidProgressCache) == "table" and now - raidProgressCacheTime < RAID_CACHE_TTL then
         return raidProgressCache
@@ -186,8 +183,7 @@ local function GetSavedRaidProgress()
 
     local count = Call(GetNumSavedInstances)
     if type(count) ~= "number" or count < 1 then
-        raidProgressCache = {}
-        raidProgressCacheTime = now
+        raidProgressCache, raidProgressCacheTime = {}, now
         return raidProgressCache
     end
 
@@ -195,11 +191,9 @@ local function GetSavedRaidProgress()
     for index = 1, count do
         local name, _, _, difficultyID, locked, _, _, isRaid, _, difficultyName,
             numEncounters, encounterProgress = Call(GetSavedInstanceInfo, index)
-
         if type(name) == "string" and name ~= "" and locked == true and isRaid == true
             and type(numEncounters) == "number" and type(encounterProgress) == "number" then
-            local previous = byName[name]
-            if PreferRaidEntry(previous, difficultyID, encounterProgress) then
+            if PreferRaidEntry(byName[name], difficultyID, encounterProgress) then
                 byName[name] = {
                     raidName = name,
                     difficultyID = type(difficultyID) == "number" and difficultyID or nil,
@@ -214,8 +208,7 @@ local function GetSavedRaidProgress()
     local result = {}
     for _, entry in pairs(byName) do result[#result + 1] = entry end
     table.sort(result, function(left, right) return left.raidName < right.raidName end)
-    raidProgressCache = result
-    raidProgressCacheTime = now
+    raidProgressCache, raidProgressCacheTime = result, now
     return result
 end
 
@@ -234,16 +227,12 @@ local function InspectUIOwnsChannel()
     if addon:IsObjectAccessible(InspectFrame) and addon:SafeMethod(InspectFrame, "IsShown") == true then
         return true
     end
-    if addon:IsObjectAccessible(PlayerSpellsFrame)
-        and addon:SafeMethod(PlayerSpellsFrame, "IsInspecting") == true then
-        return true
-    end
-    return false
+    return addon:IsObjectAccessible(PlayerSpellsFrame)
+        and addon:SafeMethod(PlayerSpellsFrame, "IsInspecting") == true
 end
 
 local function ClearPendingInspect(clearNative)
-    pendingInspectGUID = nil
-    pendingInspectUnit = nil
+    pendingInspectGUID, pendingInspectUnit = nil, nil
     if clearNative == true and type(ClearInspectPlayer) == "function" and not InspectUIOwnsChannel() then
         pcall(ClearInspectPlayer)
     end
@@ -273,11 +262,8 @@ local function RequestInspect(unit, guid, now)
     if now - inspectLastRequest <= INSPECT_REQUEST_THROTTLE then return end
 
     PruneTimedCache(inspectCache, now, INSPECT_CACHE_TTL, INSPECT_CACHE_MAX)
-    pendingInspectGUID = guid
-    pendingInspectUnit = unit
-    inspectLastRequest = now
-    local ok = pcall(NotifyInspect, unit)
-    if not ok then ClearPendingInspect(false) end
+    pendingInspectGUID, pendingInspectUnit, inspectLastRequest = guid, unit, now
+    if not pcall(NotifyInspect, unit) then ClearPendingInspect(false) end
 end
 
 local function ResolveInspectUnit(guid)
@@ -296,16 +282,13 @@ local function ContextGUID(context)
 end
 
 local function OnInspectReady(_, guid)
-    if not CanAccess(guid) or type(guid) ~= "string" or guid == "" then return end
-    if guid ~= pendingInspectGUID then return end
-
+    if not CanAccess(guid) or type(guid) ~= "string" or guid ~= pendingInspectGUID then return end
     local unit = ResolveInspectUnit(guid)
     if unit then
         local itemLevel = C_PaperDollInfo and type(C_PaperDollInfo.GetInspectItemLevel) == "function"
             and Call(C_PaperDollInfo.GetInspectItemLevel, unit) or nil
         local specID = type(GetInspectSpecialization) == "function"
             and Call(GetInspectSpecialization, unit) or nil
-
         if type(itemLevel) ~= "number" or itemLevel <= 0 then itemLevel = nil end
         if type(specID) ~= "number" or specID <= 0 then specID = nil end
 
@@ -317,7 +300,7 @@ local function OnInspectReady(_, guid)
     end
 
     ClearPendingInspect(true)
-    addon:RefreshManagedTooltipsMatching(function(_, context)
+    addon:RequestManagedTooltipRefresh(function(_, context)
         return ContextGUID(context) == guid
     end, "INSPECT_READY")
 end
@@ -333,31 +316,25 @@ local function ColorBorder(tooltip, config, raw)
             return
         end
     end
-
     if type(mode) == "string" and mode ~= "default" then
         local red, green, blue = addon:GetRGBColor(mode)
         LibEvent:trigger("tooltip.style.border.color", tooltip, red, green, blue)
         return
     end
-
     local color = addon.db and addon.db.general and addon.db.general.borderColor
-    if type(color) == "table" then
-        LibEvent:trigger("tooltip.style.border.color", tooltip, unpack(color))
-    end
+    if type(color) == "table" then LibEvent:trigger("tooltip.style.border.color", tooltip, unpack(color)) end
 end
 
 local function ColorBackground(tooltip, config, raw)
-    if not addon:IsTooltipSafe(tooltip) or type(config) ~= "table" then return end
-    local background = config.background
-    if type(background) ~= "table" then return end
-
+    local background = type(config) == "table" and config.background or nil
+    if not addon:IsTooltipSafe(tooltip) or type(background) ~= "table" then return end
     local mode = background.colorfunc
     if mode == "default" or mode == "" or mode == "inherit" then
         local color = addon.db and addon.db.general and addon.db.general.background
         if type(color) == "table" then
             local red, green, blue, alpha = unpack(color)
-            if type(background.alpha) == "number" then alpha = background.alpha end
-            LibEvent:trigger("tooltip.style.background", tooltip, red, green, blue, alpha)
+            LibEvent:trigger("tooltip.style.background", tooltip, red, green, blue,
+                type(background.alpha) == "number" and background.alpha or alpha)
         end
         return
     end
@@ -372,23 +349,24 @@ local function ColorBackground(tooltip, config, raw)
 end
 
 local function GrayForDead(tooltip, config, unit)
-    if type(config) ~= "table" or config.grayForDead ~= true then return end
-    if addon:SafeCallBoolean(UnitIsDeadOrGhost, unit) ~= true then return end
+    if type(config) ~= "table" or config.grayForDead ~= true
+        or addon:SafeCallBoolean(UnitIsDeadOrGhost, unit) ~= true then return end
 
     LibEvent:trigger("tooltip.style.border.color", tooltip, 0.6, 0.6, 0.6)
     LibEvent:trigger("tooltip.style.background", tooltip, 0.1, 0.1, 0.1)
-
-    local name = addon:SafeMethod(tooltip, "GetName")
     local lineCount = addon:SafeMethod(tooltip, "NumLines")
-    if type(name) ~= "string" or type(lineCount) ~= "number" then return end
+    if type(lineCount) ~= "number" then return end
+
     for index = 1, lineCount do
-        local line = _G[name .. "TextLeft" .. index]
-        if addon:IsObjectAccessible(line) then
-            local text = addon:SafeMethod(line, "GetText")
-            if type(text) == "string" then
-                addon:SafeMethod(line, "SetText", text:gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa"))
+        local left, right = addon:GetLine(tooltip, index)
+        for _, line in pairs({ left = left, right = right }) do
+            if addon:IsObjectAccessible(line) then
+                local text = addon:SafeMethod(line, "GetText")
+                if type(text) == "string" then
+                    addon:SafeMethod(line, "SetText", text:gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa"))
+                end
+                addon:SafeMethod(line, "SetTextColor", 0.7, 0.7, 0.7)
             end
-            addon:SafeMethod(line, "SetTextColor", 0.7, 0.7, 0.7)
         end
     end
 end
@@ -410,34 +388,43 @@ local function ShowBigFactionIcon(tooltip, config, raw)
 end
 
 local function HideLineRange(tooltip, first, last)
-    local name = addon:SafeMethod(tooltip, "GetName")
     local lineCount = addon:SafeMethod(tooltip, "NumLines")
-    if type(name) ~= "string" or type(lineCount) ~= "number" then return end
-    last = math.min(last or lineCount, lineCount)
-    for index = first, last do
-        local line = _G[name .. "TextLeft" .. index]
-        if addon:IsObjectAccessible(line) then addon:SafeMethod(line, "SetText", nil) end
-    end
+    if type(lineCount) ~= "number" then return end
+    for index = first, math.min(last or lineCount, lineCount) do addon:ClearLine(tooltip, index) end
 end
 
 local function SetTooltipLine(tooltip, index, text)
     if type(text) ~= "string" then return end
-    local line = addon:GetLine(tooltip, index)
-    if addon:IsObjectAccessible(line) then addon:SafeMethod(line, "SetText", strtrim(text)) end
+    local left, right = addon:GetLine(tooltip, index)
+    if addon:IsObjectAccessible(right) then addon:SafeMethod(right, "SetText", nil) end
+    if addon:IsObjectAccessible(left) then addon:SafeMethod(left, "SetText", strtrim(text)) end
+end
+
+local function ClearNativeUnitLines(tooltip)
+    local lineTypes = Enum and Enum.TooltipDataLineType
+    if type(lineTypes) == "table" then
+        for _, lineType in ipairs({ lineTypes.UnitLevel, lineTypes.UnitType, lineTypes.UnitDead }) do
+            if type(lineType) == "number" then addon:ClearRenderedLineType(tooltip, lineType) end
+        end
+    end
+    -- Faction/PvP lines currently have no dedicated line type. Use localized
+    -- Blizzard globals only as a narrow fallback, before writing custom rows.
+    for _, value in ipairs({ FACTION_ALLIANCE, FACTION_HORDE, PVP }) do
+        if type(value) == "string" and value ~= "" then
+            addon:HideLine(tooltip, "^" .. EscapePattern(value))
+        end
+    end
 end
 
 local function AddPlayerStats(tooltip, unit, config)
     if type(config) ~= "table" or not IsOrdinaryUnit(unit) or addon:AreUnitStatsRestricted() then return end
-
     local isSelf = addon:CanCompareUnitTokens(unit, "player")
         and addon:SafeCallBoolean(UnitIsUnit, unit, "player") == true
     local guid = GetSafeUnitGUID(unit)
     local now = GetTime and GetTime() or 0
     local inspect = GetCachedInspect(guid, now)
-    local summary
-    if config.showPveScore == true or config.showBestKey == true then
-        summary = GetMythicPlusSummary(unit)
-    end
+    local summary = (config.showPveScore == true or config.showBestKey == true)
+        and GetMythicPlusSummary(unit) or nil
 
     if not isSelf and not inspect then RequestInspect(unit, guid, now) end
 
@@ -446,12 +433,8 @@ local function AddPlayerStats(tooltip, unit, config)
         if isSelf then
             local _, equipped = Call(GetAverageItemLevel)
             if type(equipped) == "number" and equipped > 0 then itemLevel = equipped end
-        elseif inspect and type(inspect.ilvl) == "number" then
-            itemLevel = inspect.ilvl
-        end
-        if itemLevel then
-            AddStatLine(tooltip, addon.L["tooltip.itemLevel"] or "Item Level", string.format("%.1f", itemLevel))
-        end
+        elseif inspect and type(inspect.ilvl) == "number" then itemLevel = inspect.ilvl end
+        if itemLevel then AddStatLine(tooltip, Label("tooltip.itemLevel", "Item Level"), string.format("%.1f", itemLevel)) end
     end
 
     if config.showPveScore == true then
@@ -469,7 +452,7 @@ local function AddPlayerStats(tooltip, unit, config)
                     displayed = string.format("|cff%s%s|r", addon:GetHexColor(red, green, blue), displayed)
                 end
             end
-            AddStatLine(tooltip, addon.L["tooltip.pveScore"] or "PvE Score", displayed)
+            AddStatLine(tooltip, Label("tooltip.pveScore", "Mythic+ Score"), displayed)
         end
     end
 
@@ -478,7 +461,7 @@ local function AddPlayerStats(tooltip, unit, config)
         if level then
             local value = string.format("+%d", level)
             if mapName then value = value .. " - " .. mapName end
-            AddStatLine(tooltip, addon.L["tooltip.bestKey"] or "Best M+ Key", value)
+            AddStatLine(tooltip, Label("tooltip.bestKey", "Best Mythic+ Key"), value)
         end
     end
 
@@ -496,34 +479,26 @@ local function AddPlayerStats(tooltip, unit, config)
     if isSelf then
         local specIndex = Call(GetSpecialization)
         if type(specIndex) == "number" then specID = Call(GetSpecializationInfo, specIndex) end
-    elseif inspect then
-        specID = inspect.specID
-    end
+    elseif inspect then specID = inspect.specID end
 
     if type(specID) == "number" and type(GetSpecializationInfoByID) == "function" then
         local _, specName, _, _, specRole = Call(GetSpecializationInfoByID, specID)
         if type(specName) == "string" and specName ~= "" then
-            AddStatLine(tooltip, addon.L["tooltip.spec"] or "Spec", specName)
+            AddStatLine(tooltip, Label("tooltip.spec", "Specialization"), specName)
         end
         if (role == nil or role == "NONE") and type(specRole) == "string" then role = specRole end
     end
     if type(role) == "string" and role ~= "NONE" then
-        AddStatLine(tooltip, addon.L["tooltip.role"] or "Role", _G[role] or role)
+        AddStatLine(tooltip, Label("tooltip.role", "Role"), _G[role] or role)
     end
 end
 
 local function PlayerCharacter(tooltip, unit, config, raw)
-    local data = addon:GetUnitData(unit, config.elements, raw)
+    ClearNativeUnitLines(tooltip)
     HideLineRange(tooltip, 2, 3)
-    addon:HideLine(tooltip, "^" .. LEVEL)
-    addon:HideLine(tooltip, "^" .. FACTION_ALLIANCE)
-    addon:HideLine(tooltip, "^" .. FACTION_HORDE)
-    addon:HideLine(tooltip, "^" .. PVP)
-
-    for index, values in ipairs(data) do
+    for index, values in ipairs(addon:GetUnitData(unit, config.elements, raw)) do
         if type(values) == "table" then SetTooltipLine(tooltip, index, table.concat(values, " ")) end
     end
-
     ColorBorder(tooltip, config, raw)
     ColorBackground(tooltip, config, raw)
     GrayForDead(tooltip, config, unit)
@@ -532,52 +507,35 @@ local function PlayerCharacter(tooltip, unit, config, raw)
 end
 
 local function NonPlayerCharacter(tooltip, unit, config, raw)
-    local levelLine = addon:FindLine(tooltip, "^" .. LEVEL)
-    local lineCount = addon:SafeMethod(tooltip, "NumLines")
-    if levelLine or (type(lineCount) == "number" and lineCount > 1) then
-        local data = addon:GetUnitData(unit, config.elements, raw)
-        local titleLine = addon:GetNpcTitle(tooltip)
-        local keepTitle = type(config.elements) == "table"
-            and type(config.elements.npcTitle) == "table"
-            and config.elements.npcTitle.enable == true
-            and addon:IsObjectAccessible(titleLine)
-        local offset = keepTitle and 1 or 0
+    local titleLine = addon:GetNpcTitle(tooltip)
+    local keepTitle = type(config.elements) == "table"
+        and type(config.elements.npcTitle) == "table"
+        and config.elements.npcTitle.enable == true
+        and addon:IsObjectAccessible(titleLine)
+    local titleText = keepTitle and addon:SafeMethod(titleLine, "GetText") or nil
 
-        for index, values in ipairs(data) do
-            if type(values) == "table" then
-                if index == 1 then
-                    SetTooltipLine(tooltip, index, table.concat(values, " "))
-                elseif index == 2 and keepTitle then
-                    local titleText = addon:SafeMethod(titleLine, "GetText")
-                    if type(titleText) == "string" then
-                        addon:SafeMethod(titleLine, "SetText",
-                            addon:FormatData(titleText, config.elements.npcTitle, raw))
-                    end
-                    SetTooltipLine(tooltip, index + offset, table.concat(values, " "))
-                else
-                    SetTooltipLine(tooltip, index + offset, table.concat(values, " "))
-                end
+    ClearNativeUnitLines(tooltip)
+    local offset = keepTitle and 1 or 0
+    for index, values in ipairs(addon:GetUnitData(unit, config.elements, raw)) do
+        if type(values) == "table" then
+            if index == 2 and keepTitle and type(titleText) == "string" then
+                addon:SafeMethod(titleLine, "SetText",
+                    addon:FormatData(titleText, config.elements.npcTitle, raw))
             end
+            SetTooltipLine(tooltip, index + (index >= 2 and offset or 0), table.concat(values, " "))
         end
     end
 
-    addon:HideLine(tooltip, "^" .. LEVEL)
-    addon:HideLine(tooltip, "^" .. PVP)
     ColorBorder(tooltip, config, raw)
     ColorBackground(tooltip, config, raw)
     GrayForDead(tooltip, config, unit)
     ShowBigFactionIcon(tooltip, config, raw)
 end
 
-local function ResolveTooltipUnit(tooltip, unit, guid, context)
-    if type(context) == "table" and IsOrdinaryUnit(context.unitToken) then return context.unitToken end
-    local contextGUID = type(context) == "table" and context.guid or guid
-    return addon:ResolveUnitToken(unit, contextGUID)
-end
-
 local function OnTooltipUnit(_, tooltip, unit, guid, _, context)
     if not addon:IsTooltipSafe(tooltip) or not addon:AllowTrigger("unit", tooltip) then return end
-    local token = ResolveTooltipUnit(tooltip, unit, guid, context)
+    local token = type(context) == "table" and context.unitToken
+        or addon:ResolveUnitToken(unit, type(context) == "table" and context.guid or guid)
     if not IsOrdinaryUnit(token) then return end
 
     local isPlayer = addon:SafeCallBoolean(UnitIsPlayer, token)
@@ -592,16 +550,8 @@ local function OnTooltipUnit(_, tooltip, unit, guid, _, context)
     else NonPlayerCharacter(tooltip, token, config, raw) end
 end
 
-local function RefreshUnitTooltips()
-    local unitType = Enum and Enum.TooltipDataType and Enum.TooltipDataType.Unit
-    addon:RefreshManagedTooltipsMatching(function(_, context)
-        return type(context) == "table" and context.type == unitType
-    end, "MODIFIER_STATE_CHANGED")
-end
-
 local function InvalidateProgressCaches()
-    raidProgressCache = nil
-    raidProgressCacheTime = 0
+    raidProgressCache, raidProgressCacheTime = nil, 0
     wipe(mythicPlusCache)
 end
 
@@ -609,17 +559,17 @@ local M = {}
 
 function M:Init()
     self.cbUnit = OnTooltipUnit
-    self.cbModifier = RefreshUnitTooltips
     self.cbInspectReady = OnInspectReady
     self.cbInvalidate = InvalidateProgressCaches
+    self.cbCombat = function() ClearPendingInspect(true) end
 end
 
 function M:Enable()
     addon.MM:AttachTrigger("Unit", "tooltip:unit", self.cbUnit, "tooltip:unit")
-    addon.MM:AttachEvent("Unit", "MODIFIER_STATE_CHANGED", self.cbModifier, "MODIFIER_STATE_CHANGED")
     addon.MM:AttachEvent("Unit", "INSPECT_READY", self.cbInspectReady, "INSPECT_READY")
     addon.MM:AttachEvent("Unit", "PLAYER_ENTERING_WORLD, BOSS_KILL, UPDATE_INSTANCE_INFO",
         self.cbInvalidate, "progress-cache")
+    addon.MM:AttachEvent("Unit", "PLAYER_REGEN_DISABLED", self.cbCombat, "inspect-combat")
 end
 
 function M:Disable()
