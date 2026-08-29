@@ -1,0 +1,427 @@
+name: Deep functional module audit
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: roth-tooltip-deep-functional-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Wait for canonical ownership pass when still publishing
+        run: |
+          for attempt in $(seq 1 60); do
+            git fetch origin main
+            if git cat-file -e origin/main:Engine/Schema.lua 2>/dev/null \
+              && git cat-file -e origin/main:OWNERSHIP.md 2>/dev/null; then
+              git reset --hard origin/main
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Canonical ownership pass was not published in time.' >&2
+          exit 1
+
+      - name: Apply functional module corrections
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          R = Path('.')
+          def read(path): return (R / path).read_text(encoding='utf-8')
+          def write(path, text): (R / path).write_text(text, encoding='utf-8')
+          def replace_once(path, old, new, label):
+              text = read(path)
+              if old in text:
+                  write(path, text.replace(old, new, 1)); return
+              if new not in text:
+                  raise SystemExit(f'{path}: missing {label}')
+          def replace_range(path, start, end, replacement, label):
+              text = read(path)
+              try:
+                  first = text.index(start); last = text.index(end, first)
+              except ValueError as error:
+                  raise SystemExit(f'{path}: missing {label}') from error
+              write(path, text[:first] + replacement + text[last:])
+
+          # Macro, flyout, and pet-action records may display an item. Resolve
+          # the documented displayed-item accessor before falling back to spell.
+          old = '''    local actionLike = context.type == petActionType
+              or context.type == flyoutType
+              or context.type == macroType
+          if actionLike then
+              context.spellID = ReadNumber(tooltipData, "spellID")
+                  or ReadNumber(tooltipData, "spellId")
+                  or ResolveDisplayedSpellID(tooltip)
+          end
+          '''
+          new = '''    local actionLike = context.type == petActionType
+              or context.type == flyoutType
+              or context.type == macroType
+          if actionLike then
+              local _, displayedItemLink, displayedItemID = TooltipQuery(
+                  TooltipUtil and TooltipUtil.GetDisplayedItem,
+                  tooltip
+              )
+              displayedItemLink = NormalizeLink(displayedItemLink)
+              if type(displayedItemID) == "number" or displayedItemLink then
+                  context.hyperlink = displayedItemLink or context.hyperlink
+                  context.itemID = type(displayedItemID) == "number" and displayedItemID
+                      or context.itemID
+                  if not context.itemID and context.hyperlink then
+                      context.itemID = ResolveItemID(context.hyperlink)
+                  end
+                  context.spellID = nil
+              else
+                  context.spellID = ReadNumber(tooltipData, "spellID")
+                      or ReadNumber(tooltipData, "spellId")
+                      or ResolveDisplayedSpellID(tooltip)
+              end
+          end
+          '''
+          replace_once('Engine/Midnight.lua', old, new, 'action-like item context')
+
+          # Quest enrichment is processor-driven for every managed quest tooltip;
+          # no permanent ItemRefTooltip method hook is required.
+          Path('Quest.lua').write_text(r'''local _, addon = ...
+
+          local function CanAccess(value)
+              return addon:CanAccessValue(value)
+          end
+
+          local function ReadNumber(tbl, key)
+              if not CanAccess(tbl) or type(tbl) ~= "table" then return nil end
+              local value = addon:SafeGet(tbl, key)
+              if type(value) == "number" then return value end
+              return nil
+          end
+
+          local function GetQuestLevel(questID)
+              local fn = C_QuestLog and C_QuestLog.GetQuestDifficultyLevel
+              if type(fn) ~= "function" then return nil end
+              local ok, level = pcall(fn, questID)
+              if not ok or not CanAccess(level) or type(level) ~= "number" then return nil end
+              if level >= 0 then return level end
+
+              ok, level = pcall(UnitLevel, "player")
+              if not ok or not CanAccess(level) or type(level) ~= "number" then return nil end
+              return level
+          end
+
+          local function ApplyQuestColor(tooltip, questID)
+              local config = addon.db and addon.db.quest
+              if type(config) ~= "table" or config.coloredQuestBorder ~= true then return end
+              if not addon:IsTooltipSafe(tooltip) or type(questID) ~= "number" then return end
+
+              local level = GetQuestLevel(questID)
+              if type(level) ~= "number" then return end
+              local ok, color = pcall(GetQuestDifficultyColor, level)
+              if not ok or not CanAccess(color) or type(color) ~= "table" then return end
+
+              local red = ReadNumber(color, "r") or 1
+              local green = ReadNumber(color, "g") or 1
+              local blue = ReadNumber(color, "b") or 1
+              addon.LibEvent:trigger("tooltip.style.border.color", tooltip, red, green, blue)
+          end
+
+          local function OnGenericTooltip(_, tooltip, _, id, _, context)
+              if not addon.MM:IsEnabled("Quest") then return end
+              if addon.AllowTrigger and not addon:AllowTrigger("other", tooltip) then return end
+
+              local questType = Enum and Enum.TooltipDataType and Enum.TooltipDataType.Quest
+              if type(context) ~= "table" or context.type ~= questType then return end
+              local questID = type(context.id) == "number" and context.id or id
+              ApplyQuestColor(tooltip, questID)
+          end
+
+          local M = {}
+          function M:Init() self.cbGeneric = OnGenericTooltip end
+          function M:Enable()
+              addon.MM:AttachTrigger("Quest", "tooltip:genericid", self.cbGeneric, "tooltip:genericid")
+          end
+          function M:Disable() end
+          function M:OnTooltip(_) end
+          function M:OnStyleChanged(_) end
+          addon.MM:RegisterModule("Quest", M)
+          ''', encoding='utf-8')
+
+          # Model geometry is live configuration, not creation-only state.
+          model = read('Model.lua')
+          if 'local function ApplyModelLayout' not in model:
+              marker = 'local function EnsureModelFrame(tip)'
+              layout = '''local function ApplyModelLayout(frame, tip)
+              if not addon:IsObjectAccessible(frame) or not addon:IsTooltipSafe(tip) then return end
+              local config = addon.db and addon.db.model or {}
+              addon:SafeMethod(frame, "SetSize", tonumber(config.width) or 100, tonumber(config.height) or 100)
+              addon:SafeMethod(frame, "ClearAllPoints")
+              addon:SafeMethod(frame, "SetPoint", "BOTTOMRIGHT", tip, "TOPRIGHT",
+                  tonumber(config.offsetX) or 8, tonumber(config.offsetY) or -16)
+              addon:SafeMethod(frame, "SetFacing", tonumber(config.facing) or -0.25)
+          end
+
+          '''
+              model = model.replace(marker, layout + marker, 1)
+          creation = '''    addon:SafeMethod(frame, "SetSize", tonumber(config.width) or 100, tonumber(config.height) or 100)
+              addon:SafeMethod(frame, "SetFacing", tonumber(config.facing) or -0.25)
+              addon:SafeMethod(frame, "SetClampedToScreen", true)
+              addon:SafeMethod(frame, "SetFrameStrata", "TOOLTIP")
+              addon:SafeMethod(frame, "ClearAllPoints")
+              addon:SafeMethod(
+                  frame,
+                  "SetPoint",
+                  "BOTTOMRIGHT",
+                  tip,
+                  "TOPRIGHT",
+                  tonumber(config.offsetX) or 8,
+                  tonumber(config.offsetY) or -16
+              )
+          '''
+          creation_new = '''    addon:SafeMethod(frame, "SetClampedToScreen", true)
+              addon:SafeMethod(frame, "SetFrameStrata", "TOOLTIP")
+              ApplyModelLayout(frame, tip)
+          '''
+          if creation in model:
+              model = model.replace(creation, creation_new, 1)
+          update_start = model.find('    local config = addon.db and addon.db.model or {}', model.find('local function UpdateModel'))
+          if update_start >= 0:
+              update_end = model.find('    addon:SafeMethod(frame, "Show")', update_start)
+              if update_end >= 0:
+                  model = model[:update_start] + '    ApplyModelLayout(frame, tip)\n' + model[update_end:]
+          model = model.replace('function M:OnStyleChanged(_) end', '''function M:OnStyleChanged(_)
+              if addon:IsObjectAccessible(modelFrame) and addon:SafeMethod(modelFrame, "IsShown") == true then
+                  ApplyModelLayout(modelFrame, GameTooltip)
+              end
+          end''')
+          write('Model.lua', model)
+
+          # Unit owner keeps short-lived bounded social and roster caches.
+          unit = read('Unit.lua')
+          if 'local FRIEND_ICON_CACHE_TTL' not in unit:
+              constants = '''local FRIEND_ICON_CACHE_TTL = 30
+          local FRIEND_ICON_CACHE_MAX = 128
+          local ROSTER_ZONE_CACHE_TTL = 1
+          '''
+              unit = unit.replace('local MYTHIC_PLUS_CACHE_MAX = 64\n', 'local MYTHIC_PLUS_CACHE_MAX = 64\n' + constants, 1)
+
+          friend_start = unit.find('function addon:GetFriendIcon(unit)')
+          speed_start = unit.find('function addon:GetUnitSpeed(unit)', friend_start)
+          if friend_start >= 0 and speed_start > friend_start:
+              friend = r'''local friendIconCache = {}
+
+          local function CacheFriendIcon(guid, icon, now)
+              local count, oldestGUID, oldestTime = 0, nil, nil
+              for cachedGUID, entry in pairs(friendIconCache) do
+                  local stamp = type(entry) == "table" and entry.time or nil
+                  if type(stamp) ~= "number" or now - stamp > FRIEND_ICON_CACHE_TTL then
+                      friendIconCache[cachedGUID] = nil
+                  else
+                      count = count + 1
+                      if oldestTime == nil or stamp < oldestTime then
+                          oldestGUID, oldestTime = cachedGUID, stamp
+                      end
+                  end
+              end
+              if count >= FRIEND_ICON_CACHE_MAX and oldestGUID then friendIconCache[oldestGUID] = nil end
+              friendIconCache[guid] = { icon = icon or false, time = now }
+          end
+
+          function addon:GetFriendIcon(unit)
+              if self:IsUnitIdentityRestricted(unit) then return nil end
+              if not self:SafeCallBoolean(UnitIsPlayer, unit) then return nil end
+
+              local guid = Call(UnitGUID, unit)
+              if type(guid) ~= "string" or guid == "" then return nil end
+              local playerGUID = Call(UnitGUID, "player")
+              if type(playerGUID) == "string" and guid == playerGUID then return nil end
+
+              local now = GetTime and GetTime() or 0
+              local cached = friendIconCache[guid]
+              if type(cached) == "table" and type(cached.time) == "number"
+                  and now - cached.time <= FRIEND_ICON_CACHE_TTL then
+                  return cached.icon or nil
+              end
+
+              local icon
+              if self:SafeCallBoolean(C_FriendList and C_FriendList.IsFriend, guid) then
+                  icon = self.icons.friend
+              else
+                  local info = Call(C_BattleNet and C_BattleNet.GetAccountInfoByGUID, guid)
+                  if type(info) == "table" and self:SafeBoolean(ReadField(info, "isFriend")) then
+                      icon = self.icons.bnetfriend
+                  end
+              end
+              CacheFriendIcon(guid, icon, now)
+              return icon
+          end
+
+          '''
+              unit = unit[:friend_start] + friend + unit[speed_start:]
+
+          zone_start = unit.find('local function GetRosterNameAndZone')
+          info_start = unit.find('function addon:GetUnitInfo(unit)', zone_start)
+          if zone_start >= 0 and info_start > zone_start:
+              zone = r'''local rosterZoneCache = { expires = 0, byName = {} }
+
+          local function InvalidateRosterZoneCache()
+              rosterZoneCache.expires = 0
+              wipe(rosterZoneCache.byName)
+          end
+
+          local function RefreshRosterZoneCache()
+              local now = GetTime and GetTime() or 0
+              if now < rosterZoneCache.expires then return end
+              wipe(rosterZoneCache.byName)
+
+              local count = Call(GetNumGroupMembers)
+              if type(count) ~= "number" then count = 0 end
+              count = math.min(math.max(count, 0), 40)
+              for index = 1, count do
+                  local ok, name, _, _, _, _, _, zone = pcall(GetRaidRosterInfo, index)
+                  if ok and CanAccessAll(name, zone) and type(name) == "string"
+                      and type(zone) == "string" and zone ~= "" then
+                      rosterZoneCache.byName[name] = zone
+                      local shortName = name:match("^([^-]+)")
+                      if shortName and rosterZoneCache.byName[shortName] == nil then
+                          rosterZoneCache.byName[shortName] = zone
+                      end
+                  end
+              end
+              rosterZoneCache.expires = now + ROSTER_ZONE_CACHE_TTL
+          end
+
+          function addon:GetZone(unit, unitName, realm)
+              if not CanAccessAll(unit, unitName, realm) then return nil end
+              if type(unit) ~= "string" or type(unitName) ~= "string" or type(realm) ~= "string" then return nil end
+              if self:SafeCallBoolean(IsInGroup) ~= true then return nil end
+              RefreshRosterZoneCache()
+              return rosterZoneCache.byName[unitName .. "-" .. realm]
+                  or rosterZoneCache.byName[unitName]
+          end
+
+          '''
+              unit = unit[:zone_start] + zone + unit[info_start:]
+
+          unit = unit.replace('    self.cbInvalidate = InvalidateProgressCaches\n',
+              '    self.cbInvalidate = InvalidateProgressCaches\n    self.cbRoster = InvalidateRosterZoneCache\n', 1)
+          unit = unit.replace('    addon.MM:AttachEvent("Unit", "BOSS_KILL", self.cbInvalidate, "BOSS_KILL")\n',
+              '    addon.MM:AttachEvent("Unit", "BOSS_KILL", self.cbInvalidate, "BOSS_KILL")\n'
+              '    addon.MM:AttachEvent("Unit", "GROUP_ROSTER_UPDATE", self.cbRoster, "GROUP_ROSTER_UPDATE")\n', 1)
+          write('Unit.lua', unit)
+
+          # Preserve immutable schema defaults separately from the active DB.
+          config = read('Config.lua')
+          if 'addon.defaults = addon:DeepCopy(addon.db)' not in config:
+              config = config.rstrip() + '\n\naddon.defaults = addon:DeepCopy(addon.db)\n'
+          write('Config.lua', config)
+          general = read('General.lua')
+          general = general.replace('    addon.db = addon:MergeVariable(addon.db, RothTooltipDB)\n',
+              '    addon.db = addon:MergeVariable(addon.defaults or addon.db, RothTooltipDB)\n', 1)
+          write('General.lua', general)
+
+          # Extend invariants with MM API coverage and feature hook ownership.
+          checker = read('tools/check_repo.py')
+          if 'def validate_module_manager_contract()' not in checker:
+              extra = r'''
+
+          def validate_module_manager_contract() -> None:
+              manager = strip_lua_comments((ROOT / "Engine/ModuleManager.lua").read_text(encoding="utf-8"))
+              feature_files = (
+                  "General.lua", "Anchor.lua", "Target.lua", "Unit.lua", "Model.lua",
+                  "Item.lua", "Spell.lua", "Quest.lua", "LinkID.lua", "Mount.lua",
+                  "ExpansionInfo.lua", "SkinFrames.lua", "Engine/TooltipProcessor.lua",
+              )
+              used = set()
+              registrations = []
+              for relative in feature_files:
+                  code = strip_lua_comments((ROOT / relative).read_text(encoding="utf-8"))
+                  used.update(re.findall(r"addon\.MM:([A-Za-z_][A-Za-z0-9_]*)", code))
+                  registrations.extend(re.findall(r'addon\.MM:RegisterModule\("([^"]+)"', code))
+              defined = set(re.findall(r"function\s+(?:addon\.MM|MM):([A-Za-z_][A-Za-z0-9_]*)", manager))
+              missing = sorted(used - defined)
+              if missing:
+                  fail(f"ModuleManager API methods are used but not defined: {missing}")
+              duplicates = sorted({name for name in registrations if registrations.count(name) > 1})
+              if duplicates:
+                  fail(f"modules are registered more than once: {duplicates}")
+
+              approved_hooks = {"Engine/Style.lua", "Anchor.lua", "LinkID.lua", "Core.lua"}
+              for path in ROOT.rglob("*.lua"):
+                  relative = path.relative_to(ROOT).as_posix()
+                  code = strip_lua_comments(path.read_text(encoding="utf-8"))
+                  if "hooksecurefunc" in code and relative not in approved_hooks:
+                      fail(f"unowned permanent secure hook in {relative}")
+          '''
+              checker = checker.replace('\ndef main()', extra + '\ndef main()', 1)
+              checker = checker.replace('    validate_ownership_boundaries()\n',
+                  '    validate_ownership_boundaries()\n    validate_module_manager_contract()\n', 1)
+          write('tools/check_repo.py', checker)
+
+          changelog = read('CHANGELOG.md')
+          if '### Deep functional audit' not in changelog:
+              changelog = changelog.rstrip() + r'''
+
+          ### Deep functional audit
+
+          - Resolves item macros through `TooltipUtil.GetDisplayedItem` before spell fallback.
+          - Routes quest borders through the sanitized TooltipData processor and removes the permanent ItemRef hook.
+          - Applies model dimensions and offsets immediately after Settings changes.
+          - Adds bounded short-lived friend-icon and roster-zone caches owned by `Unit.lua`.
+          - Preserves immutable configuration defaults separately from the active SavedVariables table.
+          - Adds CI validation that every consumed ModuleManager method exists and permanent hooks have an explicit owner.
+          ''' + '\n'
+          write('CHANGELOG.md', changelog)
+          PY
+
+      - name: Remove this one-time workflow
+        run: rm -f .github/workflows/deep-functional-audit.yml
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1
+
+      - name: Parse and test functional audit tree
+        run: |
+          find . -type f -name '*.lua' -not -path './.git/*' -print0 \
+            | sort -z \
+            | xargs -0 -n 1 luac5.1 -p
+          lua5.1 tests/schema_ownership.lua
+          python3 tools/check_repo.py
+          git diff --check
+
+      - name: Publish validated functional audit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix deep functional tooltip module defects"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
+          FINAL_SHA="$(git rev-parse HEAD)"
+          REMOTE_MAIN="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$FINAL_SHA" = "$REMOTE_MAIN"
+          echo "FINAL_SHA=$FINAL_SHA" >> "$GITHUB_ENV"
+
+      - name: Record functional audit completion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "Deep functional module audit is on \`main\` at \`$FINAL_SHA\`. The exact tree passed Lua 5.1 parsing, schema regression tests, ownership/API invariants, and whitespace validation. Item-macro context, processor-driven Quest styling, live model layout, bounded unit caches, immutable defaults, and ModuleManager contract checks are included. Live-client validation remains open."
