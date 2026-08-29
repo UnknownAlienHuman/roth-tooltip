@@ -33,4 +33,7 @@ SkinFrames.lua
 
 libs\Template.xml
 locales\locales.xml
+Options\Core.lua
+Options\Profile.lua
+Options\DIY.lua
 Options.lua
