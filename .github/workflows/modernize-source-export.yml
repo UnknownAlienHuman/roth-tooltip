@@ -1,0 +1,26 @@
+name: Modernize source export
+
+on:
+  push:
+    branches:
+      - modernize/tooltip-runtime-2026
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package branch source
+        run: |
+          zip -qr roth-tooltip-modernize-source.zip . \
+            -x '.git/*' \
+            -x 'roth-tooltip-modernize-source.zip'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roth-tooltip-modernize-source
+          path: roth-tooltip-modernize-source.zip
+          retention-days: 1
+          if-no-files-found: error
