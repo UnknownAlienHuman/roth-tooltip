@@ -15,6 +15,8 @@ local function StopRotation()
     if rotationActive and addon:IsObjectAccessible(modelFrame) and addon:CanBindScripts(modelFrame) then
         addon:SafeMethod(modelFrame, "SetScript", "OnUpdate", nil)
     end
+    -- A restriction may temporarily prevent SetScript(nil). The callback checks
+    -- this flag first, so a residual script becomes inert immediately.
     rotationActive = false
     rotateElapsed = 0
 end
@@ -43,7 +45,7 @@ local function ApplyModelLayout(frame)
 end
 
 local function RotationUpdate(self, elapsed)
-    if type(elapsed) ~= "number" then return end
+    if not rotationActive or type(elapsed) ~= "number" then return end
     rotateElapsed = rotateElapsed + elapsed
     if rotateElapsed < 0.05 then return end
 
@@ -138,7 +140,7 @@ local function OnVariableChanged(_, key, value)
         ClearModel()
         return
     end
-    if key:find("^model%.") and addon:IsObjectAccessible(modelFrame) then
+    if key:find("^model%.") and not InCombatLockdown() and addon:IsObjectAccessible(modelFrame) then
         ApplyModelLayout(modelFrame)
     end
 end
