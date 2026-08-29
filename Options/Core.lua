@@ -7,23 +7,14 @@ local Options = addon.Options
 Options.addonName = addonName
 Options.categories = Options.categories or {}
 Options.EMPTY = Options.EMPTY or {}
+Options.L = addon.L
 
 local function HumanizeKey(value)
     if type(value) == "number" then return tostring(value) end
     value = tostring(value or "")
     if value == "" then return "" end
-    return value:gsub("([a-z])([A-Z])", "%1 %2"):gsub("^(%a)", strupper)
+    return value:gsub("([a-z])([A-Z])", "%1 %2"):gsub("_", " "):gsub("^(%a)", strupper)
 end
-
-addon.L = addon.L or {}
-setmetatable(addon.L, {
-    __index = function(self, key)
-        local segments = { strsplit(".", key) }
-        local leaf = segments[#segments]
-        return rawget(self, leaf) or HumanizeKey(leaf)
-    end,
-})
-Options.L = addon.L
 
 function Options:SetNestedValue(target, keystring, value)
     if type(target) ~= "table" or type(keystring) ~= "string" or keystring == "" then return false end
@@ -66,7 +57,10 @@ function Options:TriggerManagedTooltips(eventName, ...)
 end
 
 function Options:RefreshShownTooltips(reason)
-    if type(addon.RefreshManagedTooltipsMatching) == "function" then
+    if type(addon.RequestManagedTooltipRefresh) == "function" then
+        return addon:RequestManagedTooltipRefresh(nil, reason or "settings")
+    end
+    if not InCombatLockdown() and type(addon.RefreshManagedTooltipsMatching) == "function" then
         return addon:RefreshManagedTooltipsMatching(nil, reason or "settings")
     end
     return 0
@@ -81,9 +75,6 @@ local function NeedsVisibleRefresh(keystring)
         "unit.",
         "general.visibility.",
         "general.combatPolicy",
-        "general.statusbarColor",
-        "general.statusbarText",
-        "general.statusbarTextFormat",
     }) do
         if keystring:find(prefix, 1, true) == 1 then return true end
     end
@@ -111,22 +102,6 @@ function Options:ApplyRuntimeChange(keystring, value)
         end
     elseif keystring == "general.bgfile" then
         self:TriggerManagedTooltips("tooltip.style.bgfile", value)
-    end
-
-    if keystring == "general.statusbarText" then
-        LibEvent:trigger("tooltip.statusbar.text", value)
-    elseif keystring == "general.statusbarHeight" then
-        LibEvent:trigger("tooltip.statusbar.height", value)
-    elseif keystring == "general.statusbarTexture" then
-        LibEvent:trigger("tooltip.statusbar.texture", value)
-    elseif keystring == "general.statusbarPosition"
-        or keystring == "general.statusbarOffsetX"
-        or keystring == "general.statusbarOffsetY" then
-        LibEvent:trigger("tooltip.statusbar.position", general.statusbarPosition,
-            general.statusbarOffsetX, general.statusbarOffsetY)
-    elseif keystring:find("general.statusbarFont", 1, true) == 1 then
-        LibEvent:trigger("tooltip.statusbar.font", general.statusbarFont,
-            general.statusbarFontSize, general.statusbarFontFlag)
     elseif keystring:find("general.headerFont", 1, true) == 1 then
         self:TriggerManagedTooltips("tooltip.style.font.header", general.headerFont,
             general.headerFontSize, general.headerFontFlag)
@@ -135,8 +110,8 @@ function Options:ApplyRuntimeChange(keystring, value)
             general.bodyFontSize, general.bodyFontFlag)
     end
 
-    if type(addon.RefreshStatusBar) == "function"
-        and keystring:find("general.statusbar", 1, true) == 1 then
+    if keystring:find("general.statusbar", 1, true) == 1
+        and type(addon.RefreshStatusBar) == "function" then
         addon:RefreshStatusBar()
     end
 end
@@ -177,6 +152,12 @@ end
 
 function Options:Humanize(value)
     return HumanizeKey(value)
+end
+
+function Options:Label(keystring, fallback)
+    if type(addon.Localize) == "function" then return addon:Localize(keystring, fallback) end
+    local value = addon.L and addon.L[keystring]
+    return type(value) == "string" and value or fallback or HumanizeKey(keystring)
 end
 
 function Options:OpenCategory(category)
