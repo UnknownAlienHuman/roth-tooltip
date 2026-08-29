@@ -1,8 +1,9 @@
 -- RothTooltip Engine: event bus and module lifecycle owner.
 --
 -- One layer owns native event registration, custom trigger subscriptions,
--- callback attribution, and module enable/disable cleanup. Feature modules do
--- not need their own dispatcher, pending queue, or registration bookkeeping.
+-- callback attribution, and module enable/disable cleanup. Optional modules are
+-- not attached until General has selected and migrated the active SavedVariables
+-- store, preventing disabled modules from installing irreversible hooks.
 
 local _, addon = ...
 
@@ -11,11 +12,9 @@ LibStub = LibStub or {
     NewLibrary = function(self, name) self[name] = self[name] or {}; return self[name] end,
 }
 
-local MAJOR, MINOR = "LibEvent.7000", 3
+local MAJOR, MINOR = "LibEvent.7000", 4
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
-if not lib then
-    lib = LibStub:GetLibrary(MAJOR)
-end
+if not lib then lib = LibStub:GetLibrary(MAJOR) end
 if not lib then return end
 
 local function NewBucket()
@@ -40,19 +39,12 @@ end
 
 local function Compact(bucket)
     if type(bucket) ~= "table" or bucket.depth > 0 or not bucket.dirty then return end
-
-    local items = bucket.items
     local write = 1
-    for read = 1, #items do
-        local callback = items[read]
-        if callback then
-            items[write] = callback
-            write = write + 1
-        end
+    for read = 1, #bucket.items do
+        local callback = bucket.items[read]
+        if callback then bucket.items[write], write = callback, write + 1 end
     end
-    for index = write, #items do
-        items[index] = nil
-    end
+    for index = write, #bucket.items do bucket.items[index] = nil end
     bucket.dirty = false
 end
 
@@ -81,7 +73,6 @@ end
 
 local function BucketRemove(bucket, callback)
     if type(bucket) ~= "table" or type(callback) ~= "function" then return false end
-
     local removed = false
     for index = 1, #bucket.items do
         if bucket.items[index] == callback then
@@ -115,9 +106,7 @@ local function CallSafe(kind, eventName, callback, ...)
         lib._errState[callback] = state
     end
     state.count = state.count + 1
-    if state.count >= 3 then
-        lib._muteUntil[callback] = now + 60
-    end
+    if state.count >= 3 then lib._muteUntil[callback] = now + 60 end
 
     if type(lib._errorSink) == "function" then
         pcall(lib._errorSink, kind, eventName, errorMessage, callback)
@@ -126,14 +115,11 @@ end
 
 local function DispatchBucket(bucket, kind, eventName, ...)
     if type(bucket) ~= "table" then return end
-
     bucket.depth = bucket.depth + 1
     local limit = #bucket.items
     for index = 1, limit do
         local callback = bucket.items[index]
-        if callback then
-            CallSafe(kind, eventName, callback, ...)
-        end
+        if callback then CallSafe(kind, eventName, callback, ...) end
     end
     bucket.depth = bucket.depth - 1
     Compact(bucket)
@@ -145,9 +131,7 @@ end)
 
 local function SplitNames(names)
     local result = {}
-    for name in string.gmatch(names or "", "([^,%s]+)") do
-        result[#result + 1] = name
-    end
+    for name in string.gmatch(names or "", "([^,%s]+)") do result[#result + 1] = name end
     return result
 end
 
@@ -171,9 +155,7 @@ function lib:addEventListener(eventNames, callback)
                 end
             end
         end
-        if self.events[eventName] then
-            BucketAdd(self.events[eventName], callback)
-        end
+        if self.events[eventName] then BucketAdd(self.events[eventName], callback) end
     end
     return self
 end
@@ -181,7 +163,6 @@ end
 local function ReleaseEventIfEmpty(eventName)
     local bucket = lib.events[eventName]
     if not BucketEmpty(bucket) then return end
-
     lib.events[eventName] = nil
     pcall(frame.UnregisterEvent, frame, eventName)
 end
@@ -220,10 +201,7 @@ function lib:addTriggerListener(triggerNames, callback)
     if type(callback) ~= "function" then return self end
     for _, triggerName in ipairs(SplitNames(triggerNames)) do
         local bucket = self.triggers[triggerName]
-        if not bucket then
-            bucket = NewBucket()
-            self.triggers[triggerName] = bucket
-        end
+        if not bucket then bucket = NewBucket(); self.triggers[triggerName] = bucket end
         BucketAdd(bucket, callback)
     end
     return self
@@ -277,7 +255,6 @@ lib.attachTrigger = lib.addTriggerListener
 lib.attachTriggerOnce = lib.addTriggerListenerOnce
 lib.detachTrigger = lib.removeTriggerListener
 lib.detachAllTriggers = lib.removeAllTriggers
-
 addon.LibEvent = lib
 
 addon.MM = addon.MM or {}
@@ -317,18 +294,11 @@ end
 
 local function AddLink(moduleName, kind, eventName, original, wrapper, hook)
     local links = MM.links[moduleName]
-    if type(links) ~= "table" then
-        links = {}
-        MM.links[moduleName] = links
-    end
-
+    if type(links) ~= "table" then links = {}; MM.links[moduleName] = links end
     for index = 1, #links do
         local link = links[index]
-        if link.kind == kind and link.event == eventName and link.original == original then
-            return false
-        end
+        if link.kind == kind and link.event == eventName and link.original == original then return false end
     end
-
     links[#links + 1] = {
         kind = kind,
         event = eventName,
@@ -341,19 +311,15 @@ end
 
 function MM:Track(moduleName, callback, hook)
     if type(callback) ~= "function" then return end
-    self.meta[callback] = {
-        module = tostring(moduleName or "?"),
-        hook = tostring(hook or "?"),
-    }
+    self.meta[callback] = { module = tostring(moduleName or "?"), hook = tostring(hook or "?") }
 end
 
 function MM:OnError(callback, errorMessage)
     local metadata = self.meta[callback]
     if type(metadata) ~= "table" then return nil end
-
     local state = EnsureState(metadata.module)
     state.errors = state.errors + 1
-    state.lastError = addon.SafeToString and addon:SafeToString(errorMessage, "?") or tostring(errorMessage or "?")
+    state.lastError = addon:SafeToString(errorMessage, "?")
     state.lastHook = metadata.hook
     state.lastAt = Now()
     return metadata.module, metadata.hook
@@ -368,7 +334,6 @@ end
 function MM:OnCallStart(moduleName, hook)
     moduleName = tostring(moduleName or "?")
     if not self:IsEnabled(moduleName) then return nil end
-
     local state = EnsureState(moduleName)
     state.calls = state.calls + 1
     state.lastHook = hook or state.lastHook
@@ -378,9 +343,7 @@ end
 
 function MM:OnCallEnd(moduleName, startedAt)
     if type(startedAt) ~= "number" then return end
-    local state = EnsureState(tostring(moduleName or "?"))
-    local elapsed = Now() - startedAt
-    state.lastMs = math.max(0, elapsed) * 1000
+    EnsureState(tostring(moduleName or "?")).lastMs = math.max(0, Now() - startedAt) * 1000
 end
 
 function MM:HasTriggerSubscribers(triggerName)
@@ -402,7 +365,6 @@ end
 function MM:AttachTrigger(moduleName, triggerNames, callback, hook)
     if type(callback) ~= "function" then return end
     moduleName = tostring(moduleName or "?")
-
     for _, triggerName in ipairs(SplitNames(triggerNames)) do
         local wrapper = MakeModuleWrapper(moduleName, callback, hook or triggerName)
         if AddLink(moduleName, "trigger", triggerName, callback, wrapper, hook or triggerName) then
@@ -417,7 +379,6 @@ end
 function MM:AttachEvent(moduleName, eventNames, callback, hook)
     if type(callback) ~= "function" then return end
     moduleName = tostring(moduleName or "?")
-
     for _, eventName in ipairs(SplitNames(eventNames)) do
         local wrapper = MakeModuleWrapper(moduleName, callback, hook or eventName)
         if AddLink(moduleName, "event", eventName, callback, wrapper, hook or eventName) then
@@ -432,14 +393,13 @@ function MM:Detach(moduleName)
     moduleName = tostring(moduleName or "?")
     local links = self.links[moduleName]
     if type(links) ~= "table" then return end
-
     for index = #links, 1, -1 do
         local link = links[index]
         if link.kind == "trigger" then
             lib:detachTrigger(link.event, link.wrapper)
             self.triggerCounts[link.event] = math.max(0, (self.triggerCounts[link.event] or 1) - 1)
             if self.triggerCounts[link.event] == 0 then self.triggerCounts[link.event] = nil end
-        elseif link.kind == "event" then
+        else
             lib:detachEvent(link.event, link.wrapper)
         end
         self.meta[link.wrapper] = nil
@@ -450,7 +410,6 @@ end
 
 function MM:RegisterModule(moduleName, moduleObject)
     if type(moduleName) ~= "string" or moduleName == "" or type(moduleObject) ~= "table" then return end
-
     self.modules[moduleName] = moduleObject
     self.links[moduleName] = self.links[moduleName] or {}
     local state = EnsureState(moduleName)
@@ -467,25 +426,26 @@ function MM:RegisterModule(moduleName, moduleObject)
         return
     end
 
-    local db = EnsureModulesDB()
-    if db then
-        if db[moduleName] == false then
-            self:Disable(moduleName, true)
-        else
-            self:Enable(moduleName, true)
-        end
-    else
-        state.enabled = true
+    -- Config defaults exist before ADDON_LOADED, but they are not the active
+    -- profile. Attaching here would let a saved-disabled module install
+    -- irreversible hooks before General chooses the real DB.
+    if addon.__RT_VariablesLoaded ~= true then
+        state.attached = false
+        return
     end
+
+    local db = EnsureModulesDB()
+    if db and db[moduleName] == false then self:Disable(moduleName, true)
+    else self:Enable(moduleName, true) end
 end
 
 function MM:Enable(moduleName, silent)
     moduleName = tostring(moduleName or "")
     if moduleName == "" then return end
+    if not self.core[moduleName] and addon.__RT_VariablesLoaded ~= true then return end
 
     local state = EnsureState(moduleName)
     if state.enabled ~= false and state.attached then return end
-
     state.enabled = true
     local db = EnsureModulesDB()
     if db then db[moduleName] = true end
@@ -500,15 +460,11 @@ end
 function MM:Disable(moduleName, silent)
     moduleName = tostring(moduleName or "")
     if moduleName == "" then return end
-    if self.core[moduleName] then
-        EnsureState(moduleName).enabled = true
-        return
-    end
+    if self.core[moduleName] then EnsureState(moduleName).enabled = true return end
 
     local state = EnsureState(moduleName)
     if state.enabled == false and not state.attached then return end
     state.enabled = false
-
     local db = EnsureModulesDB()
     if db then db[moduleName] = false end
 
@@ -524,13 +480,12 @@ function MM:Toggle(moduleName)
 end
 
 function MM:ApplySaved()
-    if self.applyingSaved then return end
+    if self.applyingSaved or addon.__RT_VariablesLoaded ~= true then return end
     self.applyingSaved = true
 
     local db = EnsureModulesDB()
     if db then
         for coreName in pairs(self.core) do db[coreName] = true end
-
         local names = {}
         for moduleName in pairs(self.modules) do names[#names + 1] = moduleName end
         table.sort(names)
@@ -542,7 +497,6 @@ function MM:ApplySaved()
             end
         end
     end
-
     self.applyingSaved = false
 end
 
@@ -550,7 +504,6 @@ function MM:ExportText()
     local names = {}
     for moduleName in pairs(self.state) do names[#names + 1] = moduleName end
     table.sort(names)
-
     local output = {
         "RothTooltip Modules",
         "Name\tEnabled\tAttached\tCalls\tErrors\tLast(ms)\tLastHook\tLastError",
