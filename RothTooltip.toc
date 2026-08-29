@@ -2,7 +2,7 @@
 ## Title: Roth Tooltip
 ## Notes: Roth Tooltip for World of Warcraft: Midnight
 ## Author: Neomorph
-## Version: 12.1.0
+## Version: 12.1.1
 ## SavedVariables: RothTooltipDB
 ## SavedVariablesPerCharacter: RothTooltipCharacterDB
 
@@ -16,8 +16,10 @@ Core.lua
 Engine\Midnight.lua
 Engine\Style.lua
 Engine\TooltipRegistry.lua
+Engine\TooltipLines.lua
 Engine\TooltipProcessor.lua
 Config.lua
+Engine\Schema.lua
 General.lua
 Anchor.lua
 Target.lua
@@ -33,6 +35,7 @@ SkinFrames.lua
 
 libs\Template.xml
 locales\locales.xml
+Engine\Locale.lua
 Options\Core.lua
 Options\Profile.lua
 Options\DIY.lua
