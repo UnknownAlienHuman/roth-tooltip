@@ -1,8 +1,8 @@
 -- RothTooltip managed-tooltip registry and lifecycle invalidation.
 --
--- This is the sole lifecycle owner of the managed frame set and cache-driven
--- refresh events. Feature modules may register frames through the public API,
--- but do not maintain parallel dispatch lists.
+-- This is the sole owner of the managed frame set. Feature modules may request
+-- registration/unregistration through this API but do not maintain parallel
+-- runtime lists or dispatch paths.
 
 local _, addon = ...
 local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
@@ -26,9 +26,28 @@ local LOAD_ON_DEMAND_TOOLTIP_NAMES = {
 }
 
 addon.tooltipSet = addon.tooltipSet or setmetatable({}, { __mode = "k" })
--- Keep a dense compatibility list for the legacy Settings UI while all runtime
--- iteration uses tooltipSet. Blizzard globals already hold these frames alive.
+-- Retained only as a compatibility/debug snapshot. Runtime iteration uses the
+-- weak set, and unregistration compacts this list immediately.
 addon.tooltips = addon.tooltips or {}
+
+function addon:IsManagedTooltip(tooltip)
+    if not self:IsTooltipSafe(tooltip) or type(self.tooltipSet) ~= "table" then return false end
+    if self.tooltipSet[tooltip] then return true end
+    local parent = self:SafeMethod(tooltip, "GetParent")
+    return self:IsObjectAccessible(parent) and self.tooltipSet[parent] == true
+end
+
+function addon:RegisterTooltipFrame(tooltip)
+    if not self:IsTooltipSafe(tooltip) then return false end
+    self.tooltipSet = self.tooltipSet or setmetatable({}, { __mode = "k" })
+    self.tooltips = self.tooltips or {}
+    if self.tooltipSet[tooltip] then return true end
+
+    self.tooltipSet[tooltip] = true
+    self.tooltips[#self.tooltips + 1] = tooltip
+    LibEvent:trigger("tooltip:init", tooltip)
+    return true
+end
 
 function addon:UnregisterTooltipFrame(tooltip)
     if not self:IsObjectAccessible(tooltip) or type(self.tooltipSet) ~= "table" then return false end
@@ -36,8 +55,35 @@ function addon:UnregisterTooltipFrame(tooltip)
 
     self.tooltipSet[tooltip] = nil
     self:SetPrimaryTooltipContext(tooltip, nil)
+    for index = #self.tooltips, 1, -1 do
+        if self.tooltips[index] == tooltip then table.remove(self.tooltips, index) end
+    end
     LibEvent:trigger("tooltip:unregister", tooltip)
     return true
+end
+
+function addon:ForEachManagedTooltip(callback)
+    if type(callback) ~= "function" or type(self.tooltipSet) ~= "table" then return 0 end
+    local count = 0
+    for tooltip in pairs(self.tooltipSet) do
+        if self:IsTooltipSafe(tooltip) then
+            count = count + 1
+            callback(tooltip, count)
+        end
+    end
+    return count
+end
+
+function addon:ForEachVisibleManagedTooltip(callback)
+    if type(callback) ~= "function" then return 0 end
+    local count = 0
+    self:ForEachManagedTooltip(function(tooltip)
+        if self:SafeMethod(tooltip, "IsShown") == true then
+            count = count + 1
+            callback(tooltip, count)
+        end
+    end)
+    return count
 end
 
 local function RegisterNames(names, notifyExisting)
@@ -47,6 +93,8 @@ local function RegisterNames(names, notifyExisting)
             local alreadyRegistered = addon.tooltipSet[tooltip] == true
             addon:RegisterTooltipFrame(tooltip)
             if alreadyRegistered and notifyExisting == true then
+                -- Idempotent retry after load-on-demand creation or a temporary
+                -- ScriptBindings restriction.
                 LibEvent:trigger("tooltip:init", tooltip)
             end
         end
