@@ -132,10 +132,14 @@ local function UpdateModel(tooltip, unit, context)
     UpdateRotationState()
 end
 
-local function OnVariableChanged(_, key)
+local function OnVariableChanged(_, key, value)
     if type(key) ~= "string" then return end
-    if key:find("^model%.") or key == "unit.player.showModel" or key == "unit.npc.showModel" then
-        if addon:IsObjectAccessible(modelFrame) then ApplyModelLayout(modelFrame) end
+    if (key == "unit.player.showModel" or key == "unit.npc.showModel") and value ~= true then
+        ClearModel()
+        return
+    end
+    if key:find("^model%.") and addon:IsObjectAccessible(modelFrame) then
+        ApplyModelLayout(modelFrame)
     end
 end
 
@@ -152,6 +156,7 @@ function M:Init()
     self.cbClear = function(_, tooltip)
         if tooltip == GameTooltip then ClearModel() end
     end
+    self.cbCombat = ClearModel
     self.cbModifier = UpdateRotationState
     self.cbVariable = OnVariableChanged
 end
@@ -161,7 +166,7 @@ function M:Enable()
     addon.MM:AttachTrigger("Model", "tooltip:unit", self.cbUnit, "tooltip:unit")
     addon.MM:AttachTrigger("Model", "tooltip:cleared, tooltip:hide", self.cbClear, "tooltip:clear")
     addon.MM:AttachTrigger("Model", "tooltip:variable:changed", self.cbVariable, "variable-change")
-    addon.MM:AttachEvent("Model", "PLAYER_REGEN_DISABLED", self.cbClear, "PLAYER_REGEN_DISABLED")
+    addon.MM:AttachEvent("Model", "PLAYER_REGEN_DISABLED", self.cbCombat, "PLAYER_REGEN_DISABLED")
     addon.MM:AttachEvent("Model", "MODIFIER_STATE_CHANGED", self.cbModifier, "rotation-modifier")
 end
 
