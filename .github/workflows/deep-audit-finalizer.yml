@@ -1,0 +1,257 @@
+name: Canonical deep audit finalizer
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: roth-tooltip-canonical-deep-audit-final-state
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Materialize the deep-audit result when not yet promoted
+        run: |
+          if [ -f Engine/Schema.lua ] && [ -f OWNERSHIP.md ] && [ -f tests/schema_ownership.lua ]; then
+            exit 0
+          fi
+
+          git fetch origin audit/deep-ownership-pass:refs/remotes/origin/audit/deep-ownership-pass
+          if git cat-file -e origin/audit/deep-ownership-pass:tools/deep_audit_architecture.py 2>/dev/null; then
+            git show origin/audit/deep-ownership-pass:tools/deep_audit_architecture.py > /tmp/deep_audit_architecture.py
+            git show origin/audit/deep-ownership-pass:tools/deep_audit_modules.py > /tmp/deep_audit_modules.py
+            python3 /tmp/deep_audit_architecture.py
+            python3 /tmp/deep_audit_modules.py
+          else
+            git read-tree --reset -u origin/audit/deep-ownership-pass
+          fi
+
+      - name: Canonicalize schema ownership and audit report
+        run: |
+          cat > Engine/Schema.lua <<'LUA'
+          -- RothTooltip SavedVariables schema ownership.
+          -- Defaults are immutable. Account and character scopes receive detached
+          -- copies and cannot share mutable descendants with defaults or each other.
+
+          local _, addon = ...
+
+          local function DeepCopy(value, seen)
+              if type(value) ~= "table" then return value end
+              seen = seen or {}
+              if seen[value] then return seen[value] end
+
+              local copy = {}
+              seen[value] = copy
+              for key, child in pairs(value) do
+                  copy[DeepCopy(key, seen)] = DeepCopy(child, seen)
+              end
+              local mt = getmetatable(value)
+              if mt ~= nil then setmetatable(copy, mt) end
+              return copy
+          end
+
+          function addon:DeepCopy(value)
+              return DeepCopy(value)
+          end
+
+          function addon:FixNumericKey(tbl, seen)
+              if type(tbl) ~= "table" then return tbl end
+              seen = seen or {}
+              if seen[tbl] then return tbl end
+              seen[tbl] = true
+
+              local converted = {}
+              for key, value in pairs(tbl) do
+                  if type(key) == "string" and string.match(key, "^[1-9]%d*$") then
+                      tbl[key] = nil
+                      converted[tonumber(key)] = value
+                  end
+              end
+              for key, value in pairs(converted) do
+                  if tbl[key] == nil then tbl[key] = value end
+              end
+              for _, value in pairs(tbl) do
+                  if type(value) == "table" then self:FixNumericKey(value, seen) end
+              end
+              return tbl
+          end
+
+          local MergeDefaults
+
+          local function ValidateElements(source, destination, active)
+              local known = {}
+              for rowIndex, row in ipairs(destination) do
+                  known[rowIndex] = true
+                  if type(row) == "table" then
+                      for index = #row, 1, -1 do
+                          local key = row[index]
+                          if source[key] == nil then
+                              table.remove(row, index)
+                          else
+                              known[key] = true
+                          end
+                      end
+                  end
+              end
+
+              for key, defaultValue in pairs(source) do
+                  if type(key) ~= "number" then
+                      local currentValue = destination[key]
+                      if currentValue == nil then
+                          destination[key] = DeepCopy(defaultValue)
+                          if key ~= "factionBig" and key ~= "npcTitle" and not known[key]
+                              and type(destination[1]) == "table" then
+                              table.insert(destination[1], 1, key)
+                          end
+                      elseif type(defaultValue) == "table" then
+                          if type(currentValue) ~= "table" then
+                              destination[key] = DeepCopy(defaultValue)
+                          else
+                              MergeDefaults(defaultValue, currentValue, active)
+                          end
+                      elseif type(currentValue) ~= type(defaultValue) then
+                          destination[key] = defaultValue
+                      end
+                  end
+              end
+              return destination
+          end
+
+          MergeDefaults = function(source, destination, active)
+              if type(source) ~= "table" then return destination end
+              if type(destination) ~= "table" then destination = {} end
+
+              active = active or {}
+              if active[source] then return destination end
+              active[source] = true
+
+              for key, defaultValue in pairs(source) do
+                  local currentValue = destination[key]
+                  if key == "version" then
+                      destination[key] = defaultValue
+                  elseif currentValue == nil then
+                      destination[key] = DeepCopy(defaultValue)
+                  elseif key == "elements" and type(defaultValue) == "table"
+                      and type(currentValue) == "table" then
+                      destination[key] = ValidateElements(defaultValue, currentValue, active)
+                  elseif type(defaultValue) == "table" then
+                      if type(currentValue) ~= "table" then
+                          destination[key] = DeepCopy(defaultValue)
+                      else
+                          MergeDefaults(defaultValue, currentValue, active)
+                      end
+                  elseif type(currentValue) ~= type(defaultValue) then
+                      destination[key] = defaultValue
+                  end
+              end
+
+              active[source] = nil
+              return destination
+          end
+
+          function addon:MergeVariable(source, destination)
+              return MergeDefaults(source, destination)
+          end
+          LUA
+
+          cat > DEEP_AUDIT.md <<'MD'
+          # Deep audit: module and state ownership
+
+          This pass removes architectural ambiguity rather than adding another
+          compatibility wrapper.
+
+          ## Corrected root causes
+
+          - SavedVariables no longer receive references to mutable default tables.
+          - Nested element schemas are merged recursively, including fields added in
+            later versions.
+          - `Core.lua` no longer owns visual, anchor, status-bar, schema, or tooltip
+            processor behavior.
+          - Tooltip type metadata is owned by `Engine/TooltipProcessor.lua`.
+          - Unit presentation and progression caches are owned by `Unit.lua`, not the
+            sanitized tooltip boundary.
+          - Feature modules have one lifecycle owner: `Engine/ModuleManager.lua`.
+          - Tooltip hook installation is tracked per script, so one successful hook
+            cannot hide two failed hooks.
+          - The visual engine no longer disables Blizzard's complete background draw
+            layer.
+          - Cursor anchoring uses one UI coordinate space and recalculates effective
+            scale while following the cursor.
+          - Item quality color handling supports both ColorMixin/table and RGB tuple
+            contracts.
+          - Additional tooltip-frame scans run only for relevant load-on-demand addon
+            owners.
+
+          ## Remaining validation boundary
+
+          Static checks cannot prove secure-context behavior inside the WoW client.
+          Issue #1 remains the live matrix for combat/restriction transitions,
+          inspect races, model operations, Settings proxies, taint, and blocked or
+          forbidden actions.
+          MD
+
+      - name: Remove every temporary audit and promoter artifact
+        run: |
+          rm -f tools/deep_audit_refactor.py
+          rm -f tools/deep_audit_architecture.py
+          rm -f tools/deep_audit_modules.py
+          rm -f tools/_deep_audit_probe.txt
+          rm -f tools/_deep_audit_retrigger.txt
+          rm -f .github/workflows/deep-ownership-audit.yml
+          rm -f .github/workflows/deep-ownership-audit-v2.yml
+          rm -f .github/workflows/promote-deep-ownership-audit.yml
+          rm -f .github/workflows/promote-deep-ownership-audit-v2.yml
+          rm -f .github/workflows/deep-audit-finalizer.yml
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1
+
+      - name: Parse and test exact final tree
+        run: |
+          find . -type f -name '*.lua' -not -path './.git/*' -print0 \
+            | sort -z \
+            | xargs -0 -n 1 luac5.1 -p
+          lua5.1 tests/schema_ownership.lua
+          python3 tools/check_repo.py
+          git diff --check
+
+      - name: Commit and publish canonical tree
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize deep module ownership audit"
+          fi
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
+          FINAL_SHA="$(git rev-parse HEAD)"
+          REMOTE_MAIN="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$FINAL_SHA" = "$REMOTE_MAIN"
+          echo "FINAL_SHA=$FINAL_SHA" >> "$GITHUB_ENV"
+
+      - name: Record canonical audit state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "Canonical deep module/state audit is on \`main\` at \`$FINAL_SHA\`. The exact tree passed Lua 5.1 parsing, immutable-default/schema regression tests, repository ownership invariants, and whitespace validation. All one-time audit/promoter files were removed from the published tree. Issue #1 remains open only for live-client validation."
+
+      - name: Remove temporary audit branch
+        run: git push origin --delete audit/deep-ownership-pass || true
