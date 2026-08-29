@@ -68,10 +68,14 @@ local function ButtonNumber(button, key)
 end
 
 local function ShowAchievementID(button)
-    if not addon.MM:IsEnabled("LinkID") or not ModifierRequested() then
-        local general = addon.db and addon.db.general
-        if type(general) ~= "table" or general.alwaysShowIdInfo ~= true then return end
-    end
+    -- hooksecurefunc cannot be removed. The persistent hook is therefore a
+    -- passive adapter and must honor the live module state before doing any
+    -- tooltip work.
+    if not addon.MM:IsEnabled("LinkID") then return end
+
+    local general = addon.db and addon.db.general
+    local always = type(general) == "table" and general.alwaysShowIdInfo == true
+    if not always and not ModifierRequested() then return end
 
     local achievementID = ButtonNumber(button, "id")
     if not achievementID or not addon:IsTooltipSafe(GameTooltip) then return end
