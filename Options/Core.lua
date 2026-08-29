@@ -8,13 +8,19 @@ Options.addonName = addonName
 Options.categories = Options.categories or {}
 Options.EMPTY = Options.EMPTY or {}
 
+local function HumanizeKey(value)
+    if type(value) == "number" then return tostring(value) end
+    value = tostring(value or "")
+    if value == "" then return "" end
+    return value:gsub("([a-z])([A-Z])", "%1 %2"):gsub("^(%a)", strupper)
+end
+
 addon.L = addon.L or {}
 setmetatable(addon.L, {
     __index = function(self, key)
         local segments = { strsplit(".", key) }
         local leaf = segments[#segments]
-        return rawget(self, leaf)
-            or (leaf:gsub("([a-z])([A-Z])", "%1 %2"):gsub("^(%a)", strupper))
+        return rawget(self, leaf) or HumanizeKey(leaf)
     end,
 })
 Options.L = addon.L
@@ -76,6 +82,7 @@ local function NeedsVisibleRefresh(keystring)
         "general.visibility.",
         "general.combatPolicy",
         "general.statusbarColor",
+        "general.statusbarText",
         "general.statusbarTextFormat",
     }) do
         if keystring:find(prefix, 1, true) == 1 then return true end
@@ -169,10 +176,7 @@ function Options:MakeSettingName(keystring, suffix)
 end
 
 function Options:Humanize(value)
-    if type(value) == "number" then return tostring(value) end
-    value = tostring(value or "")
-    if value == "" then return "" end
-    return value:gsub("([a-z])([A-Z])", "%1 %2"):gsub("^(%a)", strupper)
+    return HumanizeKey(value)
 end
 
 function Options:OpenCategory(category)
