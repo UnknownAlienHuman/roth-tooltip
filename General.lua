@@ -266,26 +266,9 @@ local function SetupTooltipFonts()
     end
 end
 
-local function SetupItemRefCloseButton()
-    if not addon:IsObjectAccessible(ItemRefCloseButton) then return end
-    if C_AddOns.IsAddOnLoaded("ElvUI") then return end
-
-    addon:SafeMethod(ItemRefCloseButton, "SetSize", 14, 14)
-    addon:SafeMethod(ItemRefCloseButton, "SetPoint", "TOPRIGHT", -4, -4)
-    addon:SafeMethod(ItemRefCloseButton, "SetNormalTexture", "Interface\\Buttons\\UI-StopButton")
-    addon:SafeMethod(ItemRefCloseButton, "SetPushedTexture", "Interface\\Buttons\\UI-StopButton")
-
-    local texture = addon:SafeMethod(ItemRefCloseButton, "GetNormalTexture")
-    if addon:IsObjectAccessible(texture) then
-        addon:SafeMethod(texture, "SetVertexColor", 0.9, 0.6, 0)
-    end
-end
-
 local function InitOnce()
     if addon.__RT_GeneralInitialized then return end
     addon.__RT_GeneralInitialized = true
-
-    SetupItemRefCloseButton()
 
     local oldAccountVersion = tonumber(RothTooltipDB.version) or 0
     local oldCharacterVersion = tonumber(RothTooltipCharacterDB.version) or 0
