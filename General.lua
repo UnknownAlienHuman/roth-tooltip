@@ -6,7 +6,6 @@ RothTooltipCharacterDB = RothTooltipCharacterDB or {}
 
 local StatusTextByBar = setmetatable({}, { __mode = "k" })
 local StatusStateByBar = setmetatable({}, { __mode = "k" })
-local itemRefButtonStyled = false
 
 local REACTION_COLORS = {
     [1] = { 1.0, 0.0, 0.0 },
@@ -325,23 +324,6 @@ local function SetupTooltipFonts()
     end
 end
 
-local function SetupItemRefCloseButton()
-    if itemRefButtonStyled or not addon:IsObjectAccessible(ItemRefCloseButton) then return end
-    if C_AddOns and type(C_AddOns.IsAddOnLoaded) == "function"
-        and C_AddOns.IsAddOnLoaded("ElvUI") then
-        itemRefButtonStyled = true
-        return
-    end
-
-    addon:SafeMethod(ItemRefCloseButton, "SetSize", 14, 14)
-    addon:SafeMethod(ItemRefCloseButton, "SetPoint", "TOPRIGHT", -4, -4)
-    addon:SafeMethod(ItemRefCloseButton, "SetNormalTexture", "Interface\\Buttons\\UI-StopButton")
-    addon:SafeMethod(ItemRefCloseButton, "SetPushedTexture", "Interface\\Buttons\\UI-StopButton")
-    local texture = addon:SafeMethod(ItemRefCloseButton, "GetNormalTexture")
-    if addon:IsObjectAccessible(texture) then addon:SafeMethod(texture, "SetVertexColor", 0.9, 0.6, 0) end
-    itemRefButtonStyled = true
-end
-
 local function InitOnce()
     if addon.__RT_GeneralInitialized then return end
     addon.__RT_GeneralInitialized = true
@@ -351,7 +333,6 @@ local function InitOnce()
     RunMigrations(RothTooltipCharacterDB, tonumber(RothTooltipCharacterDB.version) or 0)
     BuildActiveDB(addon:IsUsingCharacterProfile())
     SetupStatusBar()
-    SetupItemRefCloseButton()
     SetupTooltipFonts()
     BroadcastProfile("initial-load")
 end
@@ -363,7 +344,6 @@ function M:Init()
         if name == "RothTooltip" then InitOnce() end
         if addon.__RT_GeneralInitialized then
             SetupStatusBar()
-            SetupItemRefCloseButton()
         end
     end
 
