@@ -1,31 +1,31 @@
 # RothTooltip TODO
 
-Текущий инцидент на 2026-03-13: refresh path для unit tooltip заходил в Blizzard `RebuildFromTooltipInfo()` с secret unit payload и валился в `GameTooltip_UnitColor -> UnitPlayerControlled`.
+Current incident as of 2026-03-13: the unit-tooltip refresh path entered Blizzard's `RebuildFromTooltipInfo()` with a secret unit payload and failed in `GameTooltip_UnitColor -> UnitPlayerControlled`.
 
-## Источник проблемы
+## Root cause
 
-- `RothTooltip/Core.lua` вызывал `tip.RebuildFromTooltipInfo()` раньше, чем пытался безопасно восстановить tooltip через `SetUnit()` / `SetHyperlink()`.
-- Для unit tooltips в Midnight это unsafe: Blizzard line rules снова читают `lineData.unitToken`, и при secret token `GameTooltip_UnitColor(unit)` падает на `UnitPlayerControlled(unit)`.
-- Ошибка воспроизводилась из `Unit.lua` на `MODIFIER_STATE_CHANGED`, но тот же refresh path использовался и из других мест (`INSPECT_READY`, options apply, profile reapply).
+- `RothTooltip/Core.lua` called `tip.RebuildFromTooltipInfo()` before attempting to restore the tooltip safely through `SetUnit()` / `SetHyperlink()`.
+- This is unsafe for unit tooltips in Midnight: Blizzard line rules read `lineData.unitToken` again, and when the token is secret, `GameTooltip_UnitColor(unit)` fails at `UnitPlayerControlled(unit)`.
+- The error was reproduced from `Unit.lua` on `MODIFIER_STATE_CHANGED`, but the same refresh path was also used elsewhere (`INSPECT_READY`, options apply, profile reapply).
 
-## Задачи
+## Tasks
 
-- [x] Сверить stack trace с `TooltipDataRules.lua`, `GameTooltip.lua` и `lookup_api("UnitPlayerControlled")`
-- [x] Переставить `RefreshTooltipSafe()` на безопасный приоритет `SetUnit()` / `SetHyperlink()`
-- [x] Заблокировать fallback в `RebuildFromTooltipInfo()` для unit tooltip, если safe refresh не сработал
-- [x] Прогнать статическую проверку Lua и diff только по `RothTooltip`
+- [x] Compare the stack trace with `TooltipDataRules.lua`, `GameTooltip.lua`, and `lookup_api("UnitPlayerControlled")`.
+- [x] Change `RefreshTooltipSafe()` to prioritize safe restoration through `SetUnit()` / `SetHyperlink()`.
+- [x] Block the fallback to `RebuildFromTooltipInfo()` for unit tooltips when safe refresh fails.
+- [x] Run Lua static verification and inspect the diff limited to `RothTooltip`.
 
-## Проверка после правки
+## Post-fix verification
 
-- [ ] `/reload` без ошибок `UnitPlayerControlled` / `GameTooltip_UnitColor`
-- [ ] `MODIFIER_STATE_CHANGED` не роняет открытый unit tooltip
-- [ ] `INSPECT_READY` не роняет открытый unit tooltip
-- [ ] Применение настроек / profile reapply не роняет открытый unit tooltip
+- [ ] `/reload` without `UnitPlayerControlled` / `GameTooltip_UnitColor` errors.
+- [ ] `MODIFIER_STATE_CHANGED` does not break an open unit tooltip.
+- [ ] `INSPECT_READY` does not break an open unit tooltip.
+- [ ] Applying settings or reapplying a profile does not break an open unit tooltip.
 
-## Локально подтверждено
+## Confirmed locally
 
-- `RefreshTooltipSafe()` теперь сначала пытается безопасно переоткрыть tooltip через `SetUnit()` / `SetHyperlink()`.
-- Для `Enum.TooltipDataType.Unit` код больше не проваливается обратно в `RebuildFromTooltipInfo()` после неудачного safe refresh.
-- `lookup_api("UnitPlayerControlled")` подтверждает, что API ждёт `UnitToken`, а не secret value в tainted execution.
-- `npx -y luaparse _Addons/RothTooltip/Core.lua` прошёл успешно.
-- `git diff --check -- _Addons/RothTooltip` прошёл без ошибок.
+- `RefreshTooltipSafe()` now first attempts to reopen the tooltip safely through `SetUnit()` / `SetHyperlink()`.
+- For `Enum.TooltipDataType.Unit`, the code no longer falls back to `RebuildFromTooltipInfo()` after safe refresh fails.
+- `lookup_api("UnitPlayerControlled")` confirms that the API expects a `UnitToken`, not a secret value in tainted execution.
+- `npx -y luaparse _Addons/RothTooltip/Core.lua` completed successfully.
+- `git diff --check -- _Addons/RothTooltip` completed without errors.
