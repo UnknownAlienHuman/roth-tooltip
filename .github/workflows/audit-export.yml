@@ -2,6 +2,9 @@ name: Deep audit source export
 
 on:
   workflow_dispatch:
+  push:
+    branches: [modernize/tooltip-runtime-2026]
+    paths: [.github/workflows/audit-export.yml]
 
 permissions:
   contents: read
@@ -11,14 +14,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Package repository source
+      - name: Install Lua 5.1
         run: |
-          zip -qr roth-tooltip-audit-source.zip . \
-            -x '.git/*' \
-            -x 'roth-tooltip-audit-source.zip'
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1
+      - name: Baseline tests
+        continue-on-error: true
+        run: |
+          lua5.1 tests/runtime.lua
+          find . -name '*.lua' -not -path './.git/*' -print0 | xargs -0 -n 1 luac5.1 -p
+          python3 tools/check_repo.py
+      - name: Package source and Lua build input
+        if: always()
+        run: |
+          mkdir -p /tmp/roth-audit
+          git archive --format=zip HEAD -o /tmp/roth-audit/source.zip
+          curl --fail --location https://www.lua.org/ftp/lua-5.1.5.tar.gz -o /tmp/roth-audit/lua-5.1.5.tar.gz
+          sha256sum /tmp/roth-audit/* > /tmp/roth-audit/SHA256SUMS
+          git rev-parse HEAD > /tmp/roth-audit/COMMIT
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: roth-tooltip-audit-source
-          path: roth-tooltip-audit-source.zip
+          path: /tmp/roth-audit/
           retention-days: 1
           if-no-files-found: error
