@@ -6,8 +6,8 @@
 -- the exact known Blizzard regions that were visible are restored.
 
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
-local LibMedia = LibStub:GetLibrary("LibSharedMedia-3.0", true)
+local LibEvent = addon.LibEvent
+local LibMedia = LibStub and LibStub:GetLibrary("LibSharedMedia-3.0", true)
 
 local WHITE_TEXTURE = "Interface\\Buttons\\WHITE8X8"
 local DEFAULT_BACKGROUND = "Interface\\RaidFrame\\UI-RaidFrame-GroupBg"
@@ -257,7 +257,9 @@ local function InstallStyleMethods(style)
         if type(green) == "number" then color[2] = green end
         if type(blue) == "number" then color[3] = blue end
         if type(alpha) == "number" then color[4] = alpha end
-        SetBorderColor(self.border, unpack(color))
+        addon:SafeMethod(self.rothFrame, "SetVertexColor", unpack(color))
+        if self.hideFlatBorder then SetBorderColor(self.border, 0, 0, 0, 0)
+        else SetBorderColor(self.border, unpack(color)) end
     end
 
     function style:SetBackdrop(backdrop)
@@ -372,26 +374,38 @@ local function HookOne(tooltip, state, scriptName, callback)
     end
 end
 
+local EnsureStyle
+
+local function OnTooltipShow(tooltip)
+    if not addon:IsManagedTooltip(tooltip) then return end
+    local native = NativeStateByTooltip[tooltip]
+    if native then native.hidden = false end
+    EnsureStyle(tooltip)
+    LibEvent:trigger("tooltip:show", tooltip)
+end
+
+local function OnTooltipHide(tooltip)
+    if addon:CanAccessValue(tooltip) and addon.tooltipSet[tooltip] then
+        LibEvent:trigger("tooltip:hide", tooltip)
+    end
+end
+
+local function OnTooltipCleared(tooltip)
+    if addon:CanAccessValue(tooltip) and addon.tooltipSet[tooltip] then
+        LibEvent:trigger("tooltip:cleared", tooltip)
+    end
+end
+
 local function InstallTooltipHooks(tooltip)
     if not addon:IsManagedTooltip(tooltip) then return end
     local state = HookStateByTooltip[tooltip] or {}
     HookStateByTooltip[tooltip] = state
-
-    HookOne(tooltip, state, "OnShow", function(frame)
-        local native = NativeStateByTooltip[frame]
-        if native then native.hidden = false end
-        LibEvent:trigger("tooltip:show", frame)
-    end)
-    HookOne(tooltip, state, "OnHide", function(frame)
-        LibEvent:trigger("tooltip:hide", frame)
-    end)
-    HookOne(tooltip, state, "OnTooltipCleared", function(frame)
-        addon:ResetTooltipStyleFrame(frame)
-        LibEvent:trigger("tooltip:cleared", frame)
-    end)
+    HookOne(tooltip, state, "OnShow", OnTooltipShow)
+    HookOne(tooltip, state, "OnHide", OnTooltipHide)
+    HookOne(tooltip, state, "OnTooltipCleared", OnTooltipCleared)
 end
 
-local function EnsureStyle(tooltip)
+EnsureStyle = function(tooltip)
     if not addon:IsManagedTooltip(tooltip) then return nil end
     local style = addon:GetTooltipStyle(tooltip) or CreateStyle(tooltip)
     if not style then return nil end
@@ -402,7 +416,11 @@ local function EnsureStyle(tooltip)
     return style
 end
 
-LibEvent:attachTrigger("tooltip:init, tooltip.style.init", function(_, tooltip)
+LibEvent:attachTrigger("tooltip:init", function(_, tooltip)
+    addon:ApplyGeneralStyleToTooltip(tooltip)
+end)
+
+LibEvent:attachTrigger("tooltip.style.init", function(_, tooltip)
     EnsureStyle(tooltip)
 end)
 
@@ -499,7 +517,6 @@ end)
 LibEvent:attachTrigger("tooltip.style.border.color", function(_, tooltip, red, green, blue, alpha)
     local style = EnsureStyle(tooltip)
     if not style then return end
-    if style.hideFlatBorder then SetBorderColor(style.border, 0, 0, 0, 0) return end
     local currentRed, currentGreen, currentBlue, currentAlpha = style:GetBackdropBorderColor()
     style:SetBackdropBorderColor(tonumber(red) or currentRed, tonumber(green) or currentGreen,
         tonumber(blue) or currentBlue, tonumber(alpha) or currentAlpha)
@@ -557,7 +574,7 @@ local function OnBackdropChanged(tooltip)
     if not addon:IsManagedTooltip(tooltip) then return end
     local state = NativeState(tooltip)
     state.hidden = false
-    addon:ApplyGeneralStyleToTooltip(tooltip)
+    EnsureStyle(tooltip)
 end
 
 if type(hooksecurefunc) == "function" then

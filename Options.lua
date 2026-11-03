@@ -1,5 +1,5 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 local Options = addon.Options
 
 if not Options then return end
@@ -154,7 +154,7 @@ local function RebuildMedia()
     AddUnique(media.font, { "default", "ChatFontNormal", "GameFontNormal", "QuestFont", "CombatLogFont" })
     AddUnique(media.statusbar, { "Interface\\AddOns\\RothTooltip\\texture\\StatusBar" })
 
-    local sharedMedia = LibStub:GetLibrary("LibSharedMedia-3.0", true)
+    local sharedMedia = LibStub and LibStub:GetLibrary("LibSharedMedia-3.0", true)
     if sharedMedia then
         AddUnique(media.background, sharedMedia:List("background"))
         AddUnique(media.border, sharedMedia:List("border"))
@@ -447,18 +447,7 @@ local function ElementControls(category, layout, entries)
     end
 end
 
-function Options:TryInitialize()
-    if self.initialized then return true end
-    if addon.__RT_VariablesLoaded ~= true then return false end
-    if not Settings or not Settings.RegisterVerticalLayoutCategory then return false end
-
-    RebuildMedia()
-    EnsureWildcardPopup()
-
-    local root, rootLayout = Settings.RegisterVerticalLayoutCategory("Roth Tooltip")
-    self.categories.root = root
-    self.categories.general = root
-
+local function AddGeneralSettings(root, rootLayout)
     AddSection(rootLayout, "Appearance")
     Checkbox(root, "general.mask", L["general.mask"])
     Checkbox(root, "general.skinMoreFrames", L["general.skinMoreFrames"])
@@ -489,9 +478,11 @@ function Options:TryInitialize()
     AddSection(rootLayout, "Profiles and policy")
     Checkbox(root, "general.SavedVariablesPerCharacter", L["general.SavedVariablesPerCharacter"])
     Dropdown(root, "general.combatPolicy", L["general.combatPolicy"], { "STRICT", "BALANCED", "AGGRESSIVE" })
+end
 
+local function AddUnitSettings(root)
     local player, playerLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Player")
-    self.categories.player = player
+    Options.categories.player = player
     Checkbox(player, "unit.player.showTarget", L["unit.player.showTarget"])
     Checkbox(player, "unit.player.showModel", L["unit.player.showModel"])
     Checkbox(player, "unit.player.showItemLevel", L["unit.player.showItemLevel"])
@@ -504,14 +495,14 @@ function Options:TryInitialize()
     AnchorBlock(player, "unit.player.anchor", L["unit.player.anchor"], UNIT_ANCHORS, playerLayout)
 
     local playerElements, playerElementsLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Player Elements")
-    self.categories.playerElements = playerElements
+    Options.categories.playerElements = playerElements
     ElementControls(playerElements, playerElementsLayout, PLAYER_ELEMENTS)
     Button(playerElementsLayout, "Player Layout", "Open DIY Layout Editor",
         function() Options:OpenDIYEditor() end,
         "Drag enabled player-tooltip elements to reorder the preview layout.")
 
     local npc, npcLayout = Settings.RegisterVerticalLayoutSubcategory(root, "NPC")
-    self.categories.npc = npc
+    Options.categories.npc = npc
     Checkbox(npc, "unit.npc.showTarget", L["unit.npc.showTarget"])
     Checkbox(npc, "unit.npc.showModel", L["unit.npc.showModel"])
     Checkbox(npc, "unit.npc.grayForDead", L["unit.npc.grayForDead"])
@@ -520,11 +511,13 @@ function Options:TryInitialize()
     AnchorBlock(npc, "unit.npc.anchor", L["unit.npc.anchor"], UNIT_ANCHORS, npcLayout)
 
     local npcElements, npcElementsLayout = Settings.RegisterVerticalLayoutSubcategory(root, "NPC Elements")
-    self.categories.npcElements = npcElements
+    Options.categories.npcElements = npcElements
     ElementControls(npcElements, npcElementsLayout, NPC_ELEMENTS)
+end
 
+local function AddStatusBarSettings(root)
     local statusbar, statusLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Status Bar")
-    self.categories.statusbar = statusbar
+    Options.categories.statusbar = statusbar
     AddSection(statusLayout, "Status Bar")
     Checkbox(statusbar, "general.statusbarText", L["general.statusbarText"])
     Slider(statusbar, "general.statusbarHeight", L["general.statusbarHeight"], 0, 24, 1)
@@ -537,14 +530,16 @@ function Options:TryInitialize()
     Dropdown(statusbar, "general.statusbarPosition", L["general.statusbarPosition"], { "default", "bottom", "top" })
     Dropdown(statusbar, "general.statusbarColor", L["general.statusbarColor"], { "default", "auto", "smooth" })
     Dropdown(statusbar, "general.statusbarTextFormat", L["general.statusbarTextFormat"], STATUS_FORMATS)
+end
 
+local function AddSpellAndFontSettings(root)
     local spell, spellLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Spell")
-    self.categories.spell = spell
+    Options.categories.spell = spell
     AddSection(spellLayout, "Spell")
     Checkbox(spell, "spell.showIcon", L["spell.showIcon"])
 
     local fonts, fontLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Fonts")
-    self.categories.font = fonts
+    Options.categories.font = fonts
     AddSection(fontLayout, "Header")
     Dropdown(fonts, "general.headerFont", L["general.headerFont"], media.font)
     MixedDropdown(fonts, "general.headerFontSize", L["general.headerFontSize"],
@@ -555,9 +550,11 @@ function Options:TryInitialize()
     MixedDropdown(fonts, "general.bodyFontSize", L["general.bodyFontSize"],
         { "default", 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 })
     Dropdown(fonts, "general.bodyFontFlag", L["general.bodyFontFlag"], FONT_FLAGS)
+end
 
+local function AddModuleSettings(root)
     local modules, moduleLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Modules")
-    self.categories.modules = modules
+    Options.categories.modules = modules
     AddSection(moduleLayout, "Optional modules")
     for _, moduleName in ipairs({
         "Anchor", "Target", "Unit", "Model", "Item", "Spell",
@@ -565,9 +562,11 @@ function Options:TryInitialize()
     }) do
         Checkbox(modules, "modules." .. moduleName, moduleName)
     end
+end
 
+local function AddDataSettings(root)
     local data, dataLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Data")
-    self.categories.data = data
+    Options.categories.data = data
     AddSection(dataLayout, "Profile Data")
     Button(dataLayout, "Profile Data", "Open Import / Export",
         function() Options:OpenProfileDialog() end,
@@ -578,7 +577,23 @@ function Options:TryInitialize()
     Button(dataLayout, "Profile Reset", RESET or "Reset",
         function() Options:ShowResetPopup() end,
         "Reset account and character profiles, then reload the UI.")
+end
 
+function Options:TryInitialize()
+    if self.initialized then return true end
+    if addon.__RT_VariablesLoaded ~= true then return false end
+    if not Settings or not Settings.RegisterVerticalLayoutCategory then return false end
+
+    RebuildMedia()
+    EnsureWildcardPopup()
+    local root, layout = Settings.RegisterVerticalLayoutCategory("Roth Tooltip")
+    self.categories.root, self.categories.general = root, root
+    AddGeneralSettings(root, layout)
+    AddUnitSettings(root)
+    AddStatusBarSettings(root)
+    AddSpellAndFontSettings(root)
+    AddModuleSettings(root)
+    AddDataSettings(root)
     Settings.RegisterAddOnCategory(root)
     self.initialized = true
     addon.__RT_OptionsInitialized = true

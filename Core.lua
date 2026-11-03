@@ -5,11 +5,12 @@
 -- style state, profiles, and module lifecycle are owned elsewhere.
 
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
-local LibMedia = LibStub:GetLibrary("LibSharedMedia-3.0", true)
+local LibEvent = addon.LibEvent
+local LibMedia = LibStub and LibStub:GetLibrary("LibSharedMedia-3.0", true)
 
 local MALE = MALE
 local FEMALE = FEMALE
+local DEFAULT_BORDER = "Interface\\Tooltips\\UI-Tooltip-Border"
 
 function addon:NormalizeFontFlag(flag, defaultFlag)
     if flag == "default" then flag = defaultFlag end
@@ -206,7 +207,8 @@ function addon:CheckFilter(config, raw)
     local ok, result = pcall(fn, raw, argument)
     if not ok or not self:CanAccessValue(result) then return false end
     result = result and true or false
-    return negated > 0 and not result or result
+    if negated > 0 then return not result end
+    return result
 end
 
 function addon:FormatData(value, config, raw)
@@ -466,20 +468,6 @@ LibEvent:attachTrigger("tooltip.statusbar.position", function(_, position, offse
     end
 end)
 
-local function HookBackdropFunction(functionName)
-    if type(hooksecurefunc) ~= "function" or type(_G[functionName]) ~= "function" then return end
-    hooksecurefunc(functionName, function(tooltip)
-        if not addon:IsManagedTooltip(tooltip) then return end
-        local ok, errorMessage = pcall(addon.ApplyGeneralStyleToTooltip, addon, tooltip)
-        if not ok and addon.DoctorLog then
-            addon:DoctorLog("lua", "backdrop-hook:" .. functionName, errorMessage, nil)
-        end
-    end)
-end
-
-HookBackdropFunction("SharedTooltip_SetBackdropStyle")
-HookBackdropFunction("GameTooltip_SetBackdropStyle")
-
 local function ApplyGeneralInitialization()
     local general = addon.db and addon.db.general
     if type(general) ~= "table" then return end
@@ -495,25 +483,11 @@ local function ApplyGeneralInitialization()
 
     if type(addon.ForEachManagedTooltip) ~= "function" then return end
     addon:ForEachManagedTooltip(function(tooltip)
-        LibEvent:trigger("tooltip.style.init", tooltip)
-        LibEvent:trigger("tooltip.scale", tooltip, general.scale)
-        LibEvent:trigger("tooltip.style.mask", tooltip, general.mask)
-        LibEvent:trigger("tooltip.style.bgfile", tooltip, general.bgfile)
-        LibEvent:trigger("tooltip.style.border.corner", tooltip, general.borderCorner)
-        LibEvent:trigger("tooltip.style.border.size", tooltip, general.borderSize)
-        if type(general.borderColor) == "table" then
-            LibEvent:trigger("tooltip.style.border.color", tooltip, unpack(general.borderColor))
-        end
-        if type(general.background) == "table" then
-            LibEvent:trigger("tooltip.style.background", tooltip, unpack(general.background))
-        end
+        addon:ApplyGeneralStyleToTooltip(tooltip)
     end)
 end
 
 LibEvent:attachTrigger("ROTHTOOLTIP_GENERAL_INIT", ApplyGeneralInitialization)
-LibEvent:attachTrigger("tooltip:show", function(_, tooltip)
-    addon:ApplyGeneralStyleToTooltip(tooltip)
-end)
 
 if type(hooksecurefunc) == "function" and type(GameTooltip_SetDefaultAnchor) == "function" then
     hooksecurefunc("GameTooltip_SetDefaultAnchor", function(tooltip, parent)

@@ -1,64 +1,55 @@
 # Architecture
 
-## Bootstrap and compatibility layers
+## Load and data flow
 
-`RothTooltip.toc` is a strict bootstrap. Safety, policy, the module manager, diagnostics, and style infrastructure load before the legacy core. `Engine/TooltipBootstrap.lua` prevents the legacy 12.0 `TooltipDataProcessor` registration in `Core.lua`. After Core loads, `Engine/Midnight.lua` replaces patch-sensitive access/context/unit/refresh helpers, `Engine/Runtime12_1.lua` applies focused compatibility corrections, and `Engine/TooltipProcessor.lua` installs the only active Retail 12.1 dispatcher.
-
-```text
-Engine/Safe.lua
-Engine/Policy.lua
-Engine/ModuleManager.lua
-Engine/Doctor.lua
-Engine/Debug.lua
-Engine/Style.lua
-Engine/TooltipBootstrap.lua
-Core.lua
-Engine/Midnight.lua
-Engine/Runtime12_1.lua
-Engine/TooltipProcessor.lua
-Config.lua -> General.lua -> feature modules -> XML/locales -> Options.lua
-```
-
-## Data boundary
-
-The active runtime flow is:
+The authoritative file order is [RothTooltip.toc](RothTooltip.toc): Safe, Policy, ModuleManager and diagnostics precede Core; Midnight, Style, TooltipRegistry and TooltipProcessor precede defaults, General, feature modules and Settings.
 
 ```text
 Blizzard TooltipDataProcessor
-  -> Engine/TooltipProcessor.lua
-  -> Engine/Midnight.lua sanitizer
-  -> weak per-tooltip primitive context
-  -> LibEvent.7000 trigger
-  -> enabled feature module
-  -> safe tooltip/style operation
+  -> TooltipProcessor (one permanent registration per type)
+  -> Midnight (current-data normalization and restrictions)
+  -> private addon.LibEvent
+  -> enabled feature subscriber
+  -> Style / permitted tooltip operation
+
+General -> select and migrate active profile -> variables-loaded
+        -> ModuleManager applies saved module states
+        -> Settings reads and changes the same active state
 ```
 
-Only ordinary primitive context fields may cross the sanitizer boundary: `type`, `id`, `itemID`, `spellID`, `dataInstanceID`, `hyperlink`, `guid`, and `unitToken`. Raw `TooltipData`, raw `AuraData`, and `TooltipData.args` remain inside the boundary and are never stored or forwarded.
+There is no loaded legacy processor, bootstrap suppression file or second patch-override layer in this branch. The event bus is private to RothTooltip; LibSharedMedia is optional, and no LibStub fallback is installed.
 
-`canaccessvalue`, `canaccessallvalues`, and the relevant `C_Secrets` predicates gate values before branching, comparison, indexing, formatting, storage, logging, or API calls. Restricted enrichment fails closed. `pcall` contains ordinary Lua errors but is not used to probe or declassify data.
+## Mutable-state owners
 
-## Module system
+| Concern | Owner |
+| --- | --- |
+| value/table/object access and tuple preservation | `Engine/Safe.lua` |
+| combat/content policy | `Engine/Policy.lua` |
+| events, callback lifetime, module transitions and counters | `Engine/ModuleManager.lua` |
+| current tooltip context, unit helpers and safe refresh | `Engine/Midnight.lua` |
+| native data callback registration and type dispatch | `Engine/TooltipProcessor.lua` |
+| managed tooltip membership | `Engine/TooltipRegistry.lua` |
+| style frames, region restoration and backdrop hooks | `Engine/Style.lua` |
+| formatting, media lookup, colors and shared presentation triggers | `Core.lua` |
+| defaults and active profile/status-bar behavior | `Config.lua`, `General.lua` |
+| feature caches, timers and optional enrichment | corresponding feature module |
+| Settings mutations, profile dialog and layout editor | `Options/Core.lua`, `Options/Profile.lua`, `Options/DIY.lua`, `Options.lua` |
+| bounded error records and diagnostics UI | `Engine/Doctor.lua`, `Engine/Debug.lua` |
 
-`Engine/ModuleManager.lua` implements `LibEvent.7000`, module registration, callback attribution, counters, saved enable state, and detach-on-disable behavior. Feature modules subscribe through named events/triggers and are expected to be idempotent.
+Frame bookkeeping belongs in addon-owned maps. Style uses weak-key maps for visuals and installed hooks; it does not replace Blizzard tooltip methods or store a `__RTStyle` field on them.
 
-`General.lua` merges `RothTooltipDB` and optional `RothTooltipCharacterDB`, runs migrations, initializes global styling/status-bar behavior, and emits variables-loaded triggers. `Options.lua` writes Settings proxies and replays the same module/style paths.
+## Module transitions
 
-## Runtime ownership
+General starts before saved-profile selection. Optional modules remain inactive until `tooltip:variables:loaded`. Initialization runs once after success; an initialization failure is retryable. An enable failure detaches subscriptions before cleanup and leaves the saved state disabled. Disable marks the module inactive before detaching or running feature cleanup. Reentrant transitions and subscriptions from disabled modules are rejected.
 
-Addon bookkeeping is held in addon-owned tables rather than Blizzard frame fields:
+The bus snapshots dispatch length and tombstones removed subscriptions. Removal takes effect in the current dispatch; additions wait for the next one. The last native listener unregisters its event. A failed multi-event registration rolls back only its own additions. Error attribution is per subscription, not per shared callback function.
 
-- sanitized context: weak table in `Engine/Midnight.lua`;
-- anchor ticker state: weak table in `Anchor.lua`;
-- achievement hook state: weak table in `LinkID.lua`;
-- mount tooltip state: weak table in `Mount.lua`;
-- 3D model: module-owned frame parented to `UIParent`.
+## Presentation ordering
 
-`Engine/Style.lua` intentionally attaches the visual `__RTStyle` hierarchy to managed tooltips. It is the rendering layer, not a general state cache.
+Registration/profile application establishes the base theme. Feature processors then set contextual colors. Show and native backdrop notifications restore the addon surface without replaying base colors over the feature result. Style owns each backdrop hook and each show/hide/clear hook once; a clear resets layout once. Unregister restores the native regions previously captured as shown and makes remaining hooks passive.
 
-## Refresh model
+SafeCall keeps complete result arity, including `false` and nil holes. Ordinary tuples avoid a result table; mixed tuples replace inaccessible slots without shifting the others. These helpers do not establish permission for an arbitrary API or extend borrowed-data lifetime.
 
-Modifier, item-cache, and inspect refreshes reopen a visible managed tooltip only from an accessible ordinary unit token, hyperlink, or spell ID. The addon does not cache/replay restricted raw payload and does not use `RebuildFromTooltipInfo` as a fallback.
+## Evidence boundary
 
-## External dependencies
-
-The TOC declares no required external addon. `Engine/ModuleManager.lua` provides the local event bus and minimal LibStub fallback. LibSharedMedia is optional and is consumed when available.
+[Tests and remaining client gates](tests/README.md) distinguish tested runtime components from untested full-addon integration. A UIParent parent alone does not isolate a widget anchored to restricted tooltip geometry; the existing model and refresh/enrichment paths still require their own review and named-client matrix. Do not infer complete 12.1.5 migration or measured performance from this refactor.

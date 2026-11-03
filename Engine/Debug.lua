@@ -85,21 +85,13 @@ local function Cmd(msg)
         return
     end
 
-    if (cmd == "enable" and rest ~= "") then
-        addon:EnableModule(rest)
-        print("RothTooltip: module enabled: " .. rest)
-        return
-    end
-
-    if (cmd == "disable" and rest ~= "") then
-        addon:DisableModule(rest)
-        print("RothTooltip: module disabled: " .. rest)
-        return
-    end
-
-    if (cmd == "toggle" and rest ~= "") then
-        addon:ToggleModule(rest)
-        print("RothTooltip: module toggled: " .. rest)
+    if rest ~= "" and (cmd == "enable" or cmd == "disable" or cmd == "toggle") then
+        local actions = { enable = addon.EnableModule, disable = addon.DisableModule, toggle = addon.ToggleModule }
+        if actions[cmd](addon, rest) then
+            print("RothTooltip: " .. rest .. (addon.MM:IsEnabled(rest) and " enabled" or " disabled"))
+        else
+            print("RothTooltip: module change failed: " .. rest .. ". /rtt errors")
+        end
         return
     end
 

@@ -1,5 +1,5 @@
 local addonName, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 
 addon.Options = addon.Options or {}
 local Options = addon.Options
@@ -59,9 +59,9 @@ end
 
 function Options:TriggerManagedTooltips(eventName, ...)
     if type(eventName) ~= "string" then return end
-    local arguments = { ... }
+    local arguments, count = { ... }, select("#", ...)
     self:ForEachManagedTooltip(function(tooltip)
-        LibEvent:trigger(eventName, tooltip, unpack(arguments))
+        LibEvent:trigger(eventName, tooltip, unpack(arguments, 1, count))
     end)
 end
 
@@ -128,10 +128,10 @@ function Options:ApplyRuntimeChange(keystring, value)
         LibEvent:trigger("tooltip.statusbar.font", general.statusbarFont,
             general.statusbarFontSize, general.statusbarFontFlag)
     elseif keystring:find("general.headerFont", 1, true) == 1 then
-        self:TriggerManagedTooltips("tooltip.style.font.header", general.headerFont,
+        LibEvent:trigger("tooltip.style.font.header", GameTooltip, general.headerFont,
             general.headerFontSize, general.headerFontFlag)
     elseif keystring:find("general.bodyFont", 1, true) == 1 then
-        self:TriggerManagedTooltips("tooltip.style.font.body", general.bodyFont,
+        LibEvent:trigger("tooltip.style.font.body", GameTooltip, general.bodyFont,
             general.bodyFontSize, general.bodyFontFlag)
     end
 
@@ -152,19 +152,18 @@ function Options:SetVariable(keystring, value, target)
     if not self:SetNestedValue(target, keystring, value) then return false end
 
     local moduleName = keystring:match("^modules%.(.+)$")
+    local changed = true
     if moduleName then
-        if addon.MM and addon.MM.core and addon.MM.core[moduleName] then
-            self:SetNestedValue(target, keystring, true)
-            value = true
-        end
-        if value == true then addon:EnableModule(moduleName)
-        else addon:DisableModule(moduleName) end
+        if value == true then changed = addon:EnableModule(moduleName)
+        else changed = addon:DisableModule(moduleName) end
+        value = addon.MM:IsEnabled(moduleName)
+        self:SetNestedValue(target, keystring, value)
     end
 
     self:ApplyRuntimeChange(keystring, value)
     LibEvent:trigger("tooltip:variable:changed", keystring, value)
     if NeedsVisibleRefresh(keystring) then self:RefreshShownTooltips(keystring) end
-    return true
+    return changed
 end
 
 function Options:MakeSettingName(keystring, suffix)

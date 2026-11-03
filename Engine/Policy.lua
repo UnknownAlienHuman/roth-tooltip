@@ -1,85 +1,27 @@
--- RothTooltip Engine: Policy
--- Centralizes what may run across combat, secret restrictions, and object
--- access constraints.
-
+-- Policy is separate from object access; neither can override Blizzard limits.
 local _, addon = ...
 
-addon.Policy = addon.Policy or {}
-
--- Combat policy modes:
--- STRICT: visual skin + item enhancements only.
--- BALANCED: also allows ordinary spell tooltips.
--- AGGRESSIVE: allows ordinary accessible payloads, but never overrides a
--- Blizzard secret predicate or an object access restriction.
-local DEFAULT_MODE = "STRICT"
-
 function addon:PolicyMode()
-    local db = self.db
-    local mode = db and db.general and db.general.combatPolicy
-    if type(mode) ~= "string" then return DEFAULT_MODE end
-
-    mode = mode:upper()
-    if mode ~= "STRICT" and mode ~= "BALANCED" and mode ~= "AGGRESSIVE" then
-        return DEFAULT_MODE
-    end
-    return mode
+    local general = self.db and self.db.general
+    local mode = general and general.combatPolicy
+    if type(mode) == "string" then mode = mode:upper() end
+    if mode == "BALANCED" or mode == "AGGRESSIVE" then return mode end
+    return "STRICT"
 end
 
 function addon:IsTooltipSafe(tooltip)
-    if self.CanAccessValue and not self:CanAccessValue(tooltip) then return false end
-    if tooltip == nil then return false end
-
-    if self.IsObjectAccessible then
-        return self:IsObjectAccessible(tooltip)
-    end
-
-    local canAccess = tooltip.CanBeAccessedInContext
-    if type(canAccess) == "function" then
-        local ok, result = pcall(canAccess, tooltip)
-        if not ok or result ~= true then return false end
-    end
-
-    local isForbidden = tooltip.IsForbidden
-    if type(isForbidden) == "function" then
-        local ok, result = pcall(isForbidden, tooltip)
-        if not ok or result == true then return false end
-    end
-    return true
+    local aspect = Enum and Enum.ForbiddenAspect and Enum.ForbiddenAspect.UntrustedLayoutScriptExecution
+    return type(aspect) == "number" and not self:HasForbiddenAspects(tooltip, aspect)
 end
 
-local function RestrictionsDeny(self, kind)
-    if kind == "aura" and self.AreAurasRestricted and self:AreAurasRestricted() then
-        return true
-    end
-    if kind == "unit" and self.AreUnitStatsRestricted and self:AreUnitStatsRestricted() then
-        return true
-    end
-    return false
-end
-
--- kind: skin|item|spell|unit|aura|anchor|event|other
 function addon:AllowTrigger(kind, tooltip)
-    if RestrictionsDeny(self, kind) then return false end
-
-    if tooltip ~= nil and not self:IsTooltipSafe(tooltip) then
-        return false
-    end
-
-    if kind == "skin" or kind == "anchor" then
-        return true
-    end
-
-    if InCombatLockdown() then
-        local mode = self:PolicyMode()
-        if kind == "item" then return true end
-        if kind == "spell" and (mode == "BALANCED" or mode == "AGGRESSIVE") then
-            return true
-        end
-        if mode == "AGGRESSIVE" then
-            return kind ~= "unit" and kind ~= "aura"
-        end
-        return false
-    end
-
-    return true
+    if not self:CanAccessValue(tooltip) then return false end
+    if tooltip ~= nil and not self:IsTooltipSafe(tooltip) then return false end
+    if kind == "aura" and self:AreAurasRestricted() then return false end
+    if kind == "unit" and self:AreUnitStatsRestricted() then return false end
+    if kind == "skin" or kind == "anchor" or not InCombatLockdown() then return true end
+    if kind == "item" then return true end
+    local mode = self:PolicyMode()
+    if kind == "spell" and mode ~= "STRICT" then return true end
+    return mode == "AGGRESSIVE" and kind ~= "unit" and kind ~= "aura"
 end
