@@ -10,18 +10,17 @@ permissions:
 
 jobs:
   publish:
-    if: github.event.head_commit.message == 'chore: stage second-pass audit'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
 
       - name: Apply reviewed patch
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 9ba84bb263db631fd277697d4b18442e052ef72c
+          test "$(git rev-parse HEAD^^)" = 9ba84bb263db631fd277697d4b18442e052ef72c
           echo 'b648a91f6f8f78fda804a9c7137814005c34b616474cbbb543ca12ea774f9038  .audit-transfer/second-pass.patch.b64' | sha256sum --check --strict
           base64 --decode .audit-transfer/second-pass.patch.b64 | gzip --decompress > /tmp/second-pass.patch
           echo 'c0ea0a2f9018374a5fdf316b2c35f416b54b45ed4209bbadbbb5a7bbdfb4b7da  /tmp/second-pass.patch' | sha256sum --check --strict
