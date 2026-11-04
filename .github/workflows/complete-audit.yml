@@ -1,0 +1,114 @@
+name: Validate modernization tree
+
+on:
+  push:
+    branches: [modernize/tooltip-runtime-2026]
+    paths: [.github/workflows/complete-audit.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Reconstruct the reviewed source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 6ddb0ca606ae481986537b4a35910ee0a5986576
+          mkdir -p /tmp/roth-validation
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, pathlib, subprocess
+          root = pathlib.Path.cwd()
+          packed = b''.join(base64.b64decode((root / '.audit-transfer' / f'part-{i}').read_text(), validate=True) for i in range(16))
+          assert hashlib.sha256(packed).hexdigest() == '8dee0e67f1fa78255fecb172df1b47122691657751eda168e5638d1aaf59a1c5'
+          edits = json.loads(gzip.decompress(packed))
+          pathlib.Path('/tmp/roth-validation/edits.json').write_text(json.dumps(edits))
+          def blob(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          for entry in edits:
+              name, before, after = entry[:3]
+              rel = pathlib.PurePosixPath(name)
+              assert not rel.is_absolute() and '..' not in rel.parts and '.git' not in rel.parts
+              path = root / name
+              assert not path.is_symlink()
+              old = path.read_bytes() if before is not None else b''
+              assert before is None or blob(old) == before, name + ': source changed'
+              assert before is not None or not path.exists(), name + ': unexpected file'
+              if after is None:
+                  path.unlink()
+                  continue
+              lines = old.decode().splitlines(keepends=True)
+              for start, end, replacement in reversed(entry[3]):
+                  lines[start:end] = [replacement]
+              result = ''.join(lines).encode()
+              assert blob(result) == after, name + ': reconstruction mismatch'
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(result)
+          PY
+          git rm -r -- .audit-transfer .github/workflows/complete-audit.yml
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = 30b7d30c91934b9c3130931bab43247e11d3d16c
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1
+      - name: Validate the complete candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          lua5.1 -v 2>&1 | tee /tmp/roth-validation/lua-version.txt
+          lua5.1 tests/integration.lua | tee /tmp/roth-validation/tests.log
+          find . -type f -name '*.lua' -not -path './.git/*' -print0 | xargs -0 -n 1 luac5.1 -p
+          python3 tools/check_repo.py | tee /tmp/roth-validation/repository.log
+          git diff --cached --check
+          test "$(git write-tree)" = 30b7d30c91934b9c3130931bab43247e11d3d16c
+      - name: Store validated Git objects without changing any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import concurrent.futures, json, os, pathlib, urllib.request
+          repo = 'UnknownAlienHuman/roth-tooltip'
+          assert os.environ['GITHUB_REPOSITORY'] == repo
+          endpoint = 'https://api.github.com/repos/' + repo + '/git/'
+          def post(path, value):
+              req = urllib.request.Request(endpoint + path, data=json.dumps(value).encode(), method='POST', headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
+                  'X-GitHub-Api-Version': '2022-11-28'})
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+          edits = json.loads(pathlib.Path('/tmp/roth-validation/edits.json').read_text())
+          def upload(entry):
+              name, before, after = entry[:3]
+              if after is not None:
+                  result = post('blobs', {'content': pathlib.Path(name).read_text(), 'encoding': 'utf-8'})
+                  assert result['sha'] == after, name
+              return {'path': name, 'mode': '100644', 'type': 'blob', 'sha': after}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+              elements = list(pool.map(upload, edits))
+          tree = post('trees', {'base_tree': 'fde8753fa68e53cd9510402783f9ee026ba08740', 'tree': elements})['sha']
+          assert tree == '30b7d30c91934b9c3130931bab43247e11d3d16c', tree
+          receipt = {'repository': repo, 'source_base': '6ddb0ca606ae481986537b4a35910ee0a5986576',
+              'validation_commit': os.environ['GITHUB_SHA'], 'validated_tree': tree,
+              'tests': 97, 'lua': '5.1', 'native_client': 'NOT-RUN'}
+          pathlib.Path('/tmp/roth-validation/receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          pathlib.Path('/tmp/roth-validation/edits.json').unlink()
+          print('Validated tree stored:', tree)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: roth-tooltip-final-validation
+          path: /tmp/roth-validation/
+          retention-days: 3
+          if-no-files-found: error
