@@ -28,4 +28,4 @@ Keep raw tooltip/aura records borrowed to the current callback. Copy only verifi
 
 Use one manager-owned checkout. Preserve the current branch and base SHA; publish non-forced with an expected-head check and read back the result. Keep runtime evidence separate from source inspection and mocks.
 
-Run the commands and client matrix in [tests/README.md]. Do not mark issue #1 resolved, promote release metadata or claim current-client compatibility from mock tests alone. Keep code and technical documentation in English; localized UI strings belong in `locales/`.
+Run the commands and client matrix in [tests/README.md]. Do not mark issue #1 resolved or claim current-client compatibility from metadata or mock tests alone. Keep code and technical documentation in English; localized UI strings belong in `locales/`.

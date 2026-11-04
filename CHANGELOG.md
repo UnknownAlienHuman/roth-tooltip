@@ -1,5 +1,13 @@
 # Changelog
 
+## Second-pass hardening — 2026-11-03
+
+- Target Retail 12.1.5 / Interface 120105 while retaining the named-client gate.
+- Make optional-module activation deterministic in TOC registration order.
+- Cache party roster zones outside the tooltip hot path and invalidate on roster/world transitions.
+- Remove the mutable global addon namespace, dead global lookup table and unused defaults.
+- Accept expansion ID 0 and run static checks automatically for pull requests.
+
 ## Development audit — 2026-11-03
 
 - Fresh, gated tooltip contexts; exact-source refresh and one modifier owner. Native item readiness and bag/action/comparison acquisition remain native.

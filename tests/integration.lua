@@ -4,6 +4,7 @@ local test = dofile("tests/runtime.lua")
 local Check, Load, secret = test.Check, test.Load, test.secret
 local function FullSetup(account, character, locale)
     local hooks = test.Globals()
+    RothTooltip = nil
     test.Setup()
     local state = { guid = "Creature-0-0-0-0-123-1", requests = 0, clears = 0,
         timers = {}, frames = {}, restrictions = false, isPlayer = true, ilvl = 500 }
@@ -142,12 +143,12 @@ local function FullSetup(account, character, locale)
     GetNumSavedInstances = function() return 0 end
     C_Item = {
         GetItemInfoInstant = function(value) return tonumber(tostring(value):match("item:(%d+)")) or tonumber(value), nil, nil, nil, 123 end,
-        GetItemInfo = function() return "Item", "item:42", 2, 1, 1, nil, nil, 20, nil, 123, nil, nil, nil, nil, 10 end,
+        GetItemInfo = function() return "Item", "item:42", 2, 1, 1, nil, nil, 20, nil, 123, nil, nil, nil, nil, state.itemExpansionID or 10 end,
         GetItemQualityColor = function() return 0, 1, 0 end,
     }
     C_Spell = { GetSpellTexture = function() return 123 end }
     C_MountJournal = { GetMountIDs = function() return {} end }
-    EXPANSION_NAME10 = "Expansion"
+    EXPANSION_NAME0, EXPANSION_NAME10 = "Classic", "Expansion"
     AbbreviateLargeNumbers = tostring
     C_Timer = { NewTicker = function(interval, callback)
         local timer = { interval = interval, callback = callback, cancelled = false }
@@ -472,6 +473,41 @@ Check("unregister drops membership even when native object access was revoked", 
     local s = FullSetup(); local tooltip = CreateFrame("GameTooltip")
     assert(s.addon:RegisterTooltipFrame(tooltip)); tooltip.inaccessible = true
     assert(s.addon:UnregisterTooltipFrame(tooltip)); assert(s.addon.tooltipSet[tooltip] == nil)
+    s:NoErrors()
+end)
+Check("addon namespace is private and module activation order is deterministic", function()
+    local s = FullSetup()
+    assert(RothTooltip == nil and s.addon.G == nil and s.addon.db.variables == nil)
+    assert(s.addon:ImportProfile({ version = 3.2, variables = { legacy = true } }))
+    assert(s.addon.db.variables == nil)
+    assert(table.concat(s.addon.MM.order, ",") ==
+        "General,Anchor,Target,Unit,Model,Item,Spell,Quest,LinkID,Mount,ExpansionInfo,SkinFrames")
+    s:NoErrors()
+end)
+Check("party zone lookup reuses and invalidates a bounded roster snapshot", function()
+    local s = FullSetup(); local reads = 0
+    IsInGroup = function() return true end
+    GetNumGroupMembers = function() return 2 end
+    GetRaidRosterInfo = function(index)
+        reads = reads + 1
+        if index == 1 then return "Unit-Realm", nil, nil, nil, nil, nil, "Zone A" end
+        return "Other-Realm", nil, nil, nil, nil, nil, "Zone B"
+    end
+    assert(s.addon:GetZone("party1", "Unit", "Realm") == "Zone A")
+    assert(s.addon:GetZone("party1", "Unit", "Realm") == "Zone A" and reads == 2)
+    test.SetClock(3)
+    assert(s.addon:GetZone("party1", "Unit", "Realm") == "Zone A" and reads == 4)
+    s.addon.LibEvent:event("GROUP_ROSTER_UPDATE")
+    assert(s.addon:GetZone("party1", "Unit", "Realm") == "Zone A" and reads == 6)
+    s:NoErrors()
+end)
+Check("base expansion ID zero is rendered", function()
+    local s = FullSetup()
+    s.itemExpansionID = 0
+    s:Display({ type = 0, id = 42, hyperlink = "item:42", lines = { { type = 22, leftText = "Item" } } },
+        "GetItemByID")
+    local line = s.addon:FindLine(GameTooltip, "Classic")
+    assert(line ~= nil)
     s:NoErrors()
 end)
 print(string.format("PASS: %d tests (%s), including complete TOC Lua bootstrap; native client NOT-RUN", test.Count(), _VERSION))

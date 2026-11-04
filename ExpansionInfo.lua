@@ -25,7 +25,7 @@ local function OnTooltipItem(_, tooltip, link, context)
 
     local _, _, _, _, _, _, _, _, _, _, _, _, _, _, expansionID =
         addon:SafeCall("C_Item.GetItemInfo", GetItemInfo, itemInfo)
-    if type(expansionID) ~= "number" or expansionID <= 0 then return end
+    if type(expansionID) ~= "number" or expansionID < 0 or expansionID % 1 ~= 0 then return end
 
     local expansionName = _G["EXPANSION_NAME" .. expansionID]
     if type(expansionName) ~= "string" or expansionName == "" then return end

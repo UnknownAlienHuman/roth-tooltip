@@ -17,7 +17,7 @@ General -> select and migrate active profile -> variables-loaded
         -> Settings reads and changes the same active state
 ```
 
-There is no loaded legacy processor, bootstrap suppression file or second patch-override layer in this branch. The event bus is private to RothTooltip; LibSharedMedia is optional, and no LibStub fallback is installed.
+There is no loaded legacy processor, bootstrap suppression file or second patch-override layer in this branch. The event bus and mutable addon namespace are private to RothTooltip; LibSharedMedia is optional, and no LibStub fallback is installed.
 
 ## Mutable-state owners
 
@@ -41,7 +41,7 @@ Frame bookkeeping belongs in addon-owned maps. Style uses weak-key maps for visu
 
 ## Module transitions
 
-General starts before saved-profile selection. Optional modules remain inactive until `tooltip:variables:loaded`. Initialization runs once after success; an initialization failure is retryable. An enable failure detaches subscriptions before cleanup and leaves the saved state disabled. Disable marks the module inactive before detaching or running feature cleanup. Reentrant transitions and subscriptions from disabled modules are rejected.
+General starts before saved-profile selection. Optional modules remain inactive until `tooltip:variables:loaded`, then activate in TOC registration order so shared tooltip triggers are deterministic. Initialization runs once after success; an initialization failure is retryable. An enable failure detaches subscriptions before cleanup and leaves the saved state disabled. Disable marks the module inactive before detaching or running feature cleanup. Reentrant transitions and subscriptions from disabled modules are rejected.
 
 The bus snapshots dispatch length and tombstones removed subscriptions. Removal takes effect in the current dispatch; additions wait for the next one. The last native listener unregisters its event. A failed multi-event registration rolls back only its own additions. Error attribution is per subscription, not per shared callback function.
 
@@ -53,7 +53,7 @@ SafeCall keeps complete result arity, including `false` and nil holes. Ordinary 
 
 ## Data and profile lifetime
 
-`Midnight` re-queries the primary native data on every request; it does not keep a context cache. Only synchronous ordinary context records cross the dispatcher. `UnitInfo` formats current ordinary unit metadata; `UnitStats` owns TTL/capacity-bounded enrichment, pending inspect GUID and cancellation. It stores no unit token, respects native Inspect UI and observed competing requests, and never clears the global inspect target. Modifier refresh is registered only by TooltipRegistry. Native item readiness has no parallel addon refresh tracker.
+`Midnight` re-queries the primary native data on every request; it does not keep a context cache. Only synchronous ordinary context records cross the dispatcher. `UnitInfo` formats current ordinary unit metadata and reuses a short-lived roster-zone snapshot instead of scanning the group on every hover; `UnitStats` owns TTL/capacity-bounded enrichment, pending inspect GUID and cancellation. It stores no unit token, respects native Inspect UI and observed competing requests, and never clears the global inspect target. Modifier refresh is registered only by TooltipRegistry. Native item readiness has no parallel addon refresh tracker.
 
 The model is parented and anchored to UIParent, follows ordinary cursor coordinates independently, and clears on hide, disable, restrictions and world exit. A custom cursor anchor uses ANCHOR_NONE, never a simultaneous native cursor anchor; stale timer generations cannot move or cancel a replacement.
 

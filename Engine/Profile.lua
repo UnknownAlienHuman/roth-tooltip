@@ -25,6 +25,7 @@ local removed = {
     scrollWheelStep = true, scrollMinLines = true, autoWidthEnabled = true,
     autoWidthMin = true, autoWidthMax = true, stableWidthMode = true,
     nativeWrap = true, layoutPipelineEnabled = true, showTargetBy = true,
+    variables = true,
 }
 local function Finite(value)
     return type(value) == "number" and value == value and value > -math.huge and value < math.huge

@@ -175,5 +175,4 @@ addon.db = {
         ExpansionInfo = true,
         SkinFrames = true,
     },
-    variables = {},
 }

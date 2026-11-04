@@ -22,9 +22,7 @@ function addon:NormalizeFontFlag(flag, defaultFlag)
 end
 
 addon.L = addon.L or {}
-addon.G = addon.G or {}
 setmetatable(addon.L, { __index = function(_, key) return key end })
-setmetatable(addon.G, { __index = function(_, key) return _G[key] or key end })
 
 addon.icons = {
     Alliance   = "|TInterface\\TargetingFrame\\UI-PVP-ALLIANCE:14:14:0:0:64:64:10:36:2:38|t",

@@ -133,10 +133,10 @@ def read_toc() -> tuple[list[str], dict[str, str]]:
 def validate_toc() -> list[str]:
     files, metadata = read_toc()
 
-    if metadata.get("Interface") != "120100":
-        fail(f"expected Interface 120100, got {metadata.get('Interface')!r}")
-    if metadata.get("Version") != "12.1.0":
-        fail(f"expected Version 12.1.0, got {metadata.get('Version')!r}")
+    if metadata.get("Interface") != "120105":
+        fail(f"expected Interface 120105, got {metadata.get('Interface')!r}")
+    if metadata.get("Version") != "12.1.5":
+        fail(f"expected Version 12.1.5, got {metadata.get('Version')!r}")
 
     for obsolete in OBSOLETE_PATHS:
         if obsolete in files:
@@ -265,6 +265,7 @@ def validate_runtime_invariants() -> None:
     style_raw, style = read_lua("Engine/Style.lua")
     processor_raw, processor = read_lua("Engine/TooltipProcessor.lua")
     registry_raw, _ = read_lua("Engine/TooltipRegistry.lua")
+    manager_raw, manager = read_lua("Engine/ModuleManager.lua")
 
     if "canaccessvalue" not in safe_raw or "canaccessallvalues" not in safe_raw:
         fail("Safe.lua is missing Retail capability gates")
@@ -290,6 +291,14 @@ def validate_runtime_invariants() -> None:
             fail(f"unloaded runtime Lua file: {relative}")
     if list((ROOT / "tools").glob("_*.py")):
         fail("obsolete patch-rewriting scripts remain")
+    if re.search(r"\bRothTooltip\s*=\s*addon\b", all_lua_code):
+        fail("the mutable addon namespace is exposed as a global")
+    if re.search(r"\baddon\.G\b", all_lua_code):
+        fail("dead global-lookup compatibility state remains")
+    if "variables = {}" in (ROOT / "Config.lua").read_text(encoding="utf-8"):
+        fail("dead variables defaults remain")
+    if "order = {}" not in manager_raw or "ipairs(self.order)" not in manager:
+        fail("module activation order is not deterministic")
     for symbol in ("GetPrimaryTooltipContext", "RefreshTooltipSafe", "RegisterTooltipFrame", "NormalizeProfile"):
         if all_lua_code.count("function addon:" + symbol + "(") != 1:
             fail(f"expected one owner for {symbol}")

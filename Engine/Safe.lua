@@ -1,5 +1,4 @@
 local _, addon = ...
-RothTooltip = addon
 
 local accessValue = canaccessvalue
 local accessAll = canaccessallvalues

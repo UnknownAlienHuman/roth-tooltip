@@ -1,7 +1,7 @@
 
 -- Thanks to BLizzatron
 
-local addon = RothTooltip or select(2, ...)
+local _, addon = ...
 
 if (GetLocale() ~= "ruRU") then return end
 

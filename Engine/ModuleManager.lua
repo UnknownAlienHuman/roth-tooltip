@@ -1,7 +1,7 @@
 local _, addon = ...
 
 local bus = { events = {}, triggers = {} }
-local MM = { modules = {}, state = {}, core = { General = true }, _links = {},
+local MM = { modules = {}, order = {}, state = {}, core = { General = true }, _links = {},
     meta = setmetatable({}, { __mode = "k" }) }
 addon.LibEvent, addon.MM = bus, MM
 
@@ -290,6 +290,7 @@ function MM:RegisterModule(name, module)
     if self.modules[name] == module then return end
     assert(self.modules[name] == nil, "duplicate module: " .. name)
     self.modules[name], self._links[name] = module, {}
+    self.order[#self.order + 1] = name
     State(name)
     if self.core[name] or (variablesLoaded and addon.db.modules[name] ~= false) then self:Enable(name) end
 end
@@ -298,7 +299,7 @@ function MM:ApplySaved()
     if applyingSaved or type(addon.db) ~= "table" then return end
     applyingSaved, variablesLoaded = true, true
     addon.db.modules = type(addon.db.modules) == "table" and addon.db.modules or {}
-    for name in pairs(self.modules) do
+    for _, name in ipairs(self.order) do
         if self.core[name] or addon.db.modules[name] ~= false then self:Enable(name)
         else self:Disable(name) end
     end

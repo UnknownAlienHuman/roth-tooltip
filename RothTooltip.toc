@@ -1,8 +1,8 @@
-## Interface: 120100
+## Interface: 120105
 ## Title: Roth Tooltip
 ## Notes: Roth Tooltip for World of Warcraft: Midnight
 ## Author: Neomorph
-## Version: 12.1.0
+## Version: 12.1.5
 ## SavedVariables: RothTooltipDB
 ## SavedVariablesPerCharacter: RothTooltipCharacterDB
 

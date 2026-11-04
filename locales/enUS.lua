@@ -1,5 +1,5 @@
 
-local addon = RothTooltip or select(2, ...)
+local _, addon = ...
 
 addon.L = {
     ["general.statusbarOffsetX"] = "Statusbar Margin-X (0:Default)",

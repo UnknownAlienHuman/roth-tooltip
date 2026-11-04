@@ -1,5 +1,5 @@
 
-local addon = RothTooltip or select(2, ...)
+local _, addon = ...
 
 if (GetLocale() ~= "zhTW") then return end
 

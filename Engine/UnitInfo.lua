@@ -79,12 +79,40 @@ function addon:GetTitle(name, pvpName)
     return title, first ~= 1
 end
 
+local ROSTER_ZONE_CACHE_TTL = 2
+local rosterZoneCache = {}
+local rosterZoneCacheAt = -math.huge
+
 local function GetRosterNameAndZone(index)
     if type(index) ~= "number" or type(GetRaidRosterInfo) ~= "function" then return nil, nil end
     local name, _, _, _, _, _, zone = Call(GetRaidRosterInfo, index)
-    if type(name) ~= "string" then name = nil end
-    if type(zone) ~= "string" then zone = nil end
+    if type(name) ~= "string" or name == "" then name = nil end
+    if type(zone) ~= "string" or zone == "" then zone = nil end
     return name, zone
+end
+
+function addon:InvalidateUnitRosterCache()
+    wipe(rosterZoneCache)
+    rosterZoneCacheAt = -math.huge
+end
+
+local function GetRosterZoneCache()
+    local now = GetTime and GetTime() or 0
+    if now - rosterZoneCacheAt <= ROSTER_ZONE_CACHE_TTL then return rosterZoneCache end
+
+    wipe(rosterZoneCache)
+    local count = Call(GetNumGroupMembers)
+    if type(count) ~= "number" or count < 1 then count = 0 end
+    for index = 1, math.min(count, 40) do
+        local name, zone = GetRosterNameAndZone(index)
+        if name and zone then
+            rosterZoneCache[name] = zone
+            local shortName = name:match("^[^-]+")
+            if shortName and rosterZoneCache[shortName] == nil then rosterZoneCache[shortName] = zone end
+        end
+    end
+    rosterZoneCacheAt = now
+    return rosterZoneCache
 end
 
 function addon:GetZone(unit, unitName, realm)
@@ -99,14 +127,8 @@ function addon:GetZone(unit, unitName, realm)
     end
     if not unit:match("^party%d+$") then return nil end
 
-    local fullName = unitName .. "-" .. realm
-    local count = Call(GetNumGroupMembers)
-    if type(count) ~= "number" or count < 1 then count = 5 end
-    count = math.min(count, 40)
-    for index = 1, count do
-        local name, zone = GetRosterNameAndZone(index)
-        if name == unitName or name == fullName then return zone end
-    end
+    local zones = GetRosterZoneCache()
+    return zones[unitName .. "-" .. realm] or zones[unitName]
 end
 
 function addon:GetUnitInfo(unit, elements)

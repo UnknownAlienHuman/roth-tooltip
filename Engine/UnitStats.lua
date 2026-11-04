@@ -409,6 +409,7 @@ end
 local function InvalidateProgressCaches()
     raidProgressCache, raidProgressCacheTime = nil, 0
     wipe(mythicPlusCache)
+    addon.InvalidateUnitRosterCache()
 end
 
 local function CancelRestrictedWork()

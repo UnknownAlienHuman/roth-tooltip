@@ -23,7 +23,7 @@ Selected source: `Gethe/wow-ui-source@d07eb00237d8891f153215db98a5df880a26cfe5`,
 
 Inspected platform slices: `TooltipDataHandler.lua:AddTooltipPreCall/AddTooltipPostCall/InternalProcessInfo`, `TooltipUtil.lua:GetDisplayedItem/GetDisplayedSpell/GetDisplayedUnit`, `TooltipInfoSharedDocumentation.lua:TooltipDataLineType/TooltipDataType`, `SimpleFrameScriptObjectAPIDocumentation.lua` access/forbidden-aspect queries, and `FrameAPICharacterModelBaseDocumentation.lua:CanSetUnit/SetUnit` at the selected source pin.
 
-The expected Interface family is 120105, but client `GetBuildInfo()` is NOT-RUN. TOC release metadata stays 120100 / 12.1.0 until the named-client release gate; saved profile schema 3.3 is a separate version.
+The selected Interface family is 120105 and the TOC declares 12.1.5 / 120105. Client `GetBuildInfo()` is still NOT-RUN, so this metadata does not certify runtime behavior. Saved profile schema 3.3 is a separate version.
 
 ## Client release gate
 
