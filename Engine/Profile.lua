@@ -20,13 +20,18 @@ local ranges = {
     x = { -1000, 1000 }, y = { -1000, 1000 }, cx = { -300, 300 }, cy = { -300, 300 },
     alpha = { 0, 1 },
 }
-local removed = {
-    legacyAuraFallback = true, scrollEnabled = true, scrollMaxHeight = true,
-    scrollWheelStep = true, scrollMinLines = true, autoWidthEnabled = true,
-    autoWidthMin = true, autoWidthMax = true, stableWidthMode = true,
-    nativeWrap = true, layoutPipelineEnabled = true, showTargetBy = true,
+local removedPaths = {
     variables = true,
+    ["unit.player.showTargetBy"] = true,
+    ["unit.npc.showTargetBy"] = true,
 }
+for _, key in ipairs({
+    "legacyAuraFallback", "scrollEnabled", "scrollMaxHeight", "scrollWheelStep",
+    "scrollMinLines", "autoWidthEnabled", "autoWidthMin", "autoWidthMax",
+    "stableWidthMode", "nativeWrap", "layoutPipelineEnabled",
+}) do
+    removedPaths["general." .. key] = true
+end
 local function Finite(value)
     return type(value) == "number" and value == value and value > -math.huge and value < math.huge
 end
@@ -58,10 +63,14 @@ local function Portable(value, seen, budget, depth)
     return true
 end
 local function ValidFormat(value)
-    if #value > 128 then return false end
+    if type(value) ~= "string" or #value > 128 then return false end
     for width in value:gmatch("%%[-+ #0]*(%d+)") do if tonumber(width) > 64 then return false end end
     for precision in value:gmatch("%%[-+ #0]*%d*%.(%d+)") do if tonumber(precision) > 16 then return false end end
     return true
+end
+
+function addon:IsValidElementFormat(value)
+    return ValidFormat(value)
 end
 local function Scalar(value, default, path, key)
     if type(value) == "string" and key:find("FontFlag$", 1) then
@@ -164,13 +173,10 @@ Normalize = function(value, default, strict, path)
                 path == "" and tostring(childKey) or path .. "." .. childKey)
         end
     end
-    for childKey, child in pairs(value) do
-        if default[childKey] == nil and not removed[childKey] then
-            local optional = key == "anchor" and ranges[childKey] and 0
-            if path == "general" and childKey == "statusbarFont" then optional = "default" end
-            if optional ~= nil and optional ~= false then
-                result[childKey] = Normalize(child, optional, strict, path .. "." .. childKey)
-            elseif strict then error("unknown setting: " .. path .. "." .. tostring(childKey), 0) end
+    for childKey in pairs(value) do
+        local childPath = path == "" and tostring(childKey) or path .. "." .. tostring(childKey)
+        if default[childKey] == nil and not removedPaths[childPath] and strict then
+            error("unknown setting: " .. childPath, 0)
         end
     end
     return result

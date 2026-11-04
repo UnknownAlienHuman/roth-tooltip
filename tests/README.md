@@ -9,9 +9,9 @@ python3 tools/check_repo.py
 git diff --check
 ```
 
-## Recorded local run — 2026-11-03
+## Recorded validation run — 2026-11-04
 
-**97 tests PASS on Lua 5.1.5.** `tests/integration.lua` includes the original 59 runtime checks, then executes all Lua files in TOC/XML-include order with explicit API/frame/Settings mocks. It covers cold bootstrap with late SavedVariables, four locales, all twelve modules, profile migration/import/isolation/limits, fresh and denied contexts, source-preserving refresh, semantic rows and right columns, model layout/cleanup, inspect ownership/races, cursor/mount cancellation and full-bootstrap module toggling. The original suite also runs 1,000 enable/disable cycles.
+**121 tests PASS on Lua 5.1.5.** `tests/integration.lua` includes 65 runtime checks, then executes all Lua files in TOC/XML-include order with explicit API/frame/Settings mocks. It covers cold bootstrap with late SavedVariables, four locales, all twelve modules, deterministic/reentrant lifecycle behavior, canonical Settings defaults, profile migration/import/access/size limits, fresh and denied contexts, source-preserving refresh, semantic rows and right columns, model layout/cleanup, owned inspect timeouts and races, live cursor quadrant updates, bounded DIY transactions, registry ownership, late optional media and full-bootstrap module toggling. The runtime suite also runs 1,000 enable/disable cycles.
 
 All runtime and test Lua files pass `luac5.1 -p`. The whole-tree manifest/XML graph, local Markdown links, loaded-file and single-owner checks pass. No unreferenced runtime Lua, obsolete patch-rewriting scripts, empty loader, legacy runtime overlays or temporary source-export workflow remain.
 

@@ -27,7 +27,8 @@ local owned = setmetatable({}, { __mode = "k" })
 
 local function RegisterOwned(tooltip)
     if not addon:IsTooltipSafe(tooltip) then return end
-    if addon:RegisterTooltipFrame(tooltip) then owned[tooltip] = true end
+    local registered, added = addon:RegisterTooltipFrame(tooltip)
+    if registered and added then owned[tooltip] = true end
 end
 
 local function UnregisterOwned()

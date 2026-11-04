@@ -48,10 +48,6 @@ function addon:AreAurasRestricted()
     return QuerySecretPredicate(C_Secrets and C_Secrets.ShouldAurasBeSecret)
 end
 
-function addon:AreCooldownsRestricted()
-    return QuerySecretPredicate(C_Secrets and C_Secrets.ShouldCooldownsBeSecret)
-end
-
 function addon:IsSpellAuraRestricted(spellIdentifier)
     if not CanAccess(spellIdentifier) then return true end
     local valueType = type(spellIdentifier)

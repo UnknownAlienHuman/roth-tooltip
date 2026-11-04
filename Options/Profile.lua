@@ -13,20 +13,22 @@ local MAX_PROFILE_BYTES = 65536
 local function SerializeProfile()
     if not C_EncodingUtil or type(C_EncodingUtil.SerializeJSON) ~= "function" then return nil end
     local ok, result = pcall(C_EncodingUtil.SerializeJSON, { format = "RothTooltip", encodingVersion = 1, profile = addon.db })
-    if ok and type(result) == "string" and #result <= MAX_PROFILE_BYTES then return result end
+    if ok and addon:CanAccessValue(result) and type(result) == "string"
+        and #result <= MAX_PROFILE_BYTES then return result end
 end
 
 local function DeserializeProfile(text)
     if type(text) ~= "string" or text == "" or #text > MAX_PROFILE_BYTES then return nil end
     if not C_EncodingUtil or type(C_EncodingUtil.DeserializeJSON) ~= "function" then return nil end
     local ok, result = pcall(C_EncodingUtil.DeserializeJSON, text)
-    if not ok or type(result) ~= "table" then return nil end
-    if result.format ~= nil then
-        if result.format ~= "RothTooltip" or result.encodingVersion ~= 1 then return nil end
-        return result.profile
+    if not ok or not addon:CanAccessValue(result) or type(result) ~= "table"
+        or not addon:CanAccessTable(result) or getmetatable(result) ~= nil then return nil end
+    local format = addon:SafeGet(result, "format")
+    if format ~= nil then
+        if format ~= "RothTooltip" or addon:SafeGet(result, "encodingVersion") ~= 1 then return nil end
+        return addon:SafeGet(result, "profile")
     end
     return result -- Legacy unwrapped JSON still passes the same strict schema.
-
 end
 
 local function EnsureResetPopup()
@@ -53,8 +55,9 @@ function Options:ShowResetPopup()
 end
 
 local function CreateProfileDialog()
-    if addon.__RTVariablesDialog and addon:IsObjectAccessible(addon.__RTVariablesDialog) then
-        return addon.__RTVariablesDialog
+    if addon.__RTVariablesDialog ~= nil then
+        if addon:IsObjectAccessible(addon.__RTVariablesDialog) then return addon.__RTVariablesDialog end
+        return nil
     end
 
     local ok, dialog = pcall(CreateFrame, "Frame", nil, UIParent, "RothTooltipVariablesTemplate")

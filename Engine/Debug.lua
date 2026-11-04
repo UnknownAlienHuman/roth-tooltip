@@ -4,11 +4,15 @@
 local _, addon = ...
 
 local function EnsureFrame()
-    if (addon.__DoctorFrame and addon.__DoctorFrame:IsObjectType("Frame")) then
-        return addon.__DoctorFrame
+    if addon.__DoctorFrame ~= nil then
+        if addon:IsObjectAccessible(addon.__DoctorFrame)
+            and addon:SafeMethod(addon.__DoctorFrame, "IsObjectType", "Frame") == true then
+            return addon.__DoctorFrame
+        end
+        return nil
     end
 
-    local f = CreateFrame("Frame", "RothTooltipDoctorFrame", UIParent, "BackdropTemplate")
+    local f = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     f:SetSize(620, 480)
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
@@ -55,9 +59,11 @@ end
 
 function addon:ShowDoctor(text)
     local f = EnsureFrame()
+    if not f then return false end
     f._editbox:SetText(text or "")
     f._editbox:HighlightText(0)
     f:Show()
+    return true
 end
 
 local function Cmd(msg)

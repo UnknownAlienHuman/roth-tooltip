@@ -6,7 +6,26 @@
 
 local _, addon = ...
 local LibEvent = addon.LibEvent
-local LibMedia = LibStub and LibStub:GetLibrary("LibSharedMedia-3.0", true)
+local LibMedia
+
+local function GetLibMedia()
+    if LibMedia then return LibMedia end
+    if not LibStub or type(LibStub.GetLibrary) ~= "function" then return nil end
+    local ok, library = pcall(LibStub.GetLibrary, LibStub, "LibSharedMedia-3.0", true)
+    if ok and type(library) == "table" then LibMedia = library end
+    return LibMedia
+end
+
+function addon:GetSharedMediaFile(kind, value)
+    if type(kind) ~= "string" or type(value) ~= "string" then return nil end
+    local media = GetLibMedia()
+    if not media or type(media.IsValid) ~= "function" or type(media.Fetch) ~= "function" then return nil end
+    local ok, valid = pcall(media.IsValid, media, kind, value)
+    if not ok or valid ~= true then return nil end
+    local fetched
+    ok, fetched = pcall(media.Fetch, media, kind, value)
+    if ok and type(fetched) == "string" then return fetched end
+end
 
 local MALE = MALE
 local FEMALE = FEMALE
@@ -30,8 +49,6 @@ addon.icons = {
     Neutral    = "|TInterface\\Timer\\Panda-Logo:14|t",
     pvp        = "|TInterface\\TargetingFrame\\UI-PVP-FFA:14:14:0:0:64:64:10:36:0:38|t",
     class      = "|TInterface\\TargetingFrame\\UI-Classes-Circles:14:14:0:0:256:256:%d:%d:%d:%d|t",
-    battlepet  = "|TInterface\\Timer\\Panda-Logo:15|t",
-    pettype    = "|TInterface\\TargetingFrame\\PetBadge-%s:14|t",
     questboss  = "|TInterface\\TargetingFrame\\PortraitQuestBadge:0|t",
     friend     = "|TInterface\\AddOns\\RothTooltip\\texture\\friend:14:14:0:0:32:32:1:30:2:30|t",
     bnetfriend = "|TInterface\\ChatFrame\\UI-ChatIcon-BattleNet:14:14:0:0:32:32:1:30:2:30|t",
@@ -86,9 +103,8 @@ function addon:GetFont(font, defaultFont)
         local object = _G[font]
         local resolved = self:SafeMethod(object, "GetFont")
         if type(resolved) == "string" then font = resolved end
-    elseif type(font) == "string" and LibMedia and LibMedia:IsValid("font", font) then
-        local ok, resolved = pcall(LibMedia.Fetch, LibMedia, "font", font)
-        if ok and type(resolved) == "string" then font = resolved end
+    elseif type(font) == "string" then
+        font = self:GetSharedMediaFile("font", font) or font
     end
     return type(font) == "string" and font or defaultFont
 end
@@ -96,19 +112,12 @@ end
 function addon:GetBgFile(value)
     if type(value) ~= "string" then return nil end
     if self.bgs[value] then return self.bgs[value] end
-    if LibMedia and LibMedia:IsValid("background", value) then
-        local ok, resolved = pcall(LibMedia.Fetch, LibMedia, "background", value)
-        if ok and type(resolved) == "string" then return resolved end
-    end
+    return self:GetSharedMediaFile("background", value)
 end
 
 function addon:GetBarFile(value)
     if type(value) ~= "string" then return value end
-    if LibMedia and LibMedia:IsValid("statusbar", value) then
-        local ok, resolved = pcall(LibMedia.Fetch, LibMedia, "statusbar", value)
-        if ok and type(resolved) == "string" then return resolved end
-    end
-    return value
+    return self:GetSharedMediaFile("statusbar", value) or value
 end
 
 function addon:GetGender(gender)

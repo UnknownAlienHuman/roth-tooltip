@@ -10,7 +10,7 @@ The installed folder must be `Interface/AddOns/RothTooltip`, with `RothTooltip.t
 
 Open Settings with `/tt`, `/tip` or `/tinytooltip`. Categories cover appearance, player/NPC elements, health bar, fonts, modules, profiles and the player layout editor. `/rtt errors` shows bounded diagnostics; `/rtt modules` shows module state. `/rtt enable <name>` and `/rtt disable <name>` use the same lifecycle as Settings.
 
-Profiles are account-wide or per-character. Imports accept bounded RothTooltip JSON envelopes and validated legacy raw JSON. Invalid/newer profiles are rejected without replacing active settings. Saved schema 3.3 preserves explicit false values and isolates mutable account/character defaults. Structural profile changes are refused in combat.
+Profiles are account-wide or per-character. Imports accept bounded RothTooltip JSON envelopes and validated legacy raw JSON. Decoded documents are access-gated and validated before commit; invalid/newer profiles are rejected without replacing active settings. Saved schema 3.3 preserves explicit false values and isolates mutable account/character defaults. Settings defaults come from the canonical schema, and structural profile/layout changes are refused in combat.
 
 ## Ownership and safety
 
@@ -20,7 +20,7 @@ The processor consumes current, borrowed native data and emits only ordinary pri
 
 Automatic refresh only repeats an exact supported standard getter/setter pair. Native bag, inventory, action and comparison paths retain their acquisition context and readiness handling. Some settings take effect on the next native display rather than converting those tooltips into generic item/spell tooltips.
 
-Unit formatting edits semantic name/level rows; quest, owner, threat and unknown rows are not overwritten by positional assumptions. Party-zone lookups reuse a short-lived roster snapshot instead of scanning the roster for every hover. NPC titles remain native. Item IDs have one owner (LinkID), and the obsolete private achievement-scroll hook is removed. Background inspection is throttled, observes competing requests and never calls `ClearInspectPlayer`; disabling both item level and specialization disables its requests. The model has no layout or hierarchy dependency on native tooltips.
+Unit formatting edits semantic name/level rows; quest, owner, threat and unknown rows are not overwritten by positional assumptions. Party-zone lookups reuse a short-lived roster snapshot instead of scanning the roster for every hover. NPC titles remain native. Item IDs have one owner (LinkID), and the obsolete private achievement-scroll hook is removed. Background inspection is throttled, owns and cancels its timeout, observes competing requests and never calls `ClearInspectPlayer`; disabling both item level and specialization disables its requests. The model has no layout or hierarchy dependency on native tooltips. Cursor anchoring re-evaluates current scale/quadrant, and DIY layout edits are bounded, combat-safe transactions.
 
 ## Development
 

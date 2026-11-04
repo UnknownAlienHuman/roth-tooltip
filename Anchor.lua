@@ -20,85 +20,65 @@ local function StopCursorAnchor(tooltip)
     states[tooltip] = nil
 end
 
-local function SetCursorPoint(tooltip, point, offsetX, offsetY, scale)
-    if not addon:IsTooltipSafe(tooltip) or type(scale) ~= "number" or scale <= 0 then return false end
+local function ResolveCursorPoint(mode, point, offsetX, offsetY)
+    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
     local cursorX, cursorY = GetCursorPosition()
-    if not addon:CanAccessAllValues(cursorX, cursorY) or type(cursorX) ~= "number" or type(cursorY) ~= "number" then return false end
+    if not addon:CanAccessAllValues(scale, cursorX, cursorY)
+        or type(scale) ~= "number" or scale <= 0
+        or type(cursorX) ~= "number" or type(cursorY) ~= "number" then return nil end
 
-    local x = floor(cursorX / scale + offsetX)
-    local y = floor(cursorY / scale + offsetY)
-    local state = states[tooltip]
-    if type(state) == "table" and state.point == point and state.x == x and state.y == y then
-        return true
+    cursorX, cursorY = cursorX / scale, cursorY / scale
+    point = type(point) == "string" and point or "BOTTOM"
+    offsetX, offsetY = tonumber(offsetX) or 0, tonumber(offsetY) or 20
+
+    if mode == "auto" then
+        local width = addon:SafeMethod(UIParent, "GetWidth")
+        local height = addon:SafeMethod(UIParent, "GetHeight")
+        if type(width) ~= "number" or type(height) ~= "number" or width <= 0 or height <= 0 then return nil end
+        local right, top = cursorX > width / 2, cursorY > height / 2
+        if right and top then
+            point, offsetX, offsetY = "TOPRIGHT", offsetX - 10, offsetY - 10
+        elseif top then
+            point, offsetX, offsetY = "TOPLEFT", offsetX + 10, offsetY - 10
+        elseif right then
+            point, offsetX, offsetY = "BOTTOMRIGHT", offsetX - 10, offsetY + 10
+        else
+            point, offsetX, offsetY = "BOTTOMLEFT", offsetX + 10, offsetY + 10
+        end
     end
 
-    state = state or {}
-    state.point, state.x, state.y = point, x, y
-    states[tooltip] = state
+    return point, floor(cursorX + offsetX), floor(cursorY + offsetY)
+end
+
+local function UpdateCursorAnchor(tooltip, state)
+    if states[tooltip] ~= state or not addon:IsTooltipSafe(tooltip) then return false end
+    local point, x, y = ResolveCursorPoint(state.mode, state.point, state.offsetX, state.offsetY)
+    if not point then return false end
+    if state.currentPoint == point and state.x == x and state.y == y then return true end
+    state.currentPoint, state.x, state.y = point, x, y
     addon:SafeMethod(tooltip, "ClearAllPoints")
     addon:SafeMethod(tooltip, "SetPoint", point, UIParent, "BOTTOMLEFT", x, y)
     return true
 end
 
-local function AnchorToCursor(tooltip, point, offsetX, offsetY)
+local function StartCursorAnchor(tooltip, mode, point, offsetX, offsetY)
     StopCursorAnchor(tooltip)
     if not addon:IsTooltipSafe(tooltip) then return end
 
-    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
-    if type(scale) ~= "number" or scale <= 0 then return end
-    point = type(point) == "string" and point or "BOTTOM"
-    offsetX, offsetY = tonumber(offsetX) or 0, tonumber(offsetY) or 20
-    if not SetCursorPoint(tooltip, point, offsetX, offsetY, scale) then return end
+    local state = { mode = mode, point = point, offsetX = offsetX, offsetY = offsetY }
+    states[tooltip] = state
+    if not UpdateCursorAnchor(tooltip, state) then states[tooltip] = nil; return end
     if not C_Timer or type(C_Timer.NewTicker) ~= "function" then return end
 
-    local state = states[tooltip] or {}
     state.ticker = C_Timer.NewTicker(CURSOR_INTERVAL, function()
         if states[tooltip] ~= state then return end
         if not addon.MM:IsEnabled("Anchor") or not addon:IsTooltipSafe(tooltip)
             or addon:SafeMethod(tooltip, "IsShown") ~= true
-            or addon:SafeMethod(tooltip, "GetAnchorType") ~= "ANCHOR_NONE" then
+            or addon:SafeMethod(tooltip, "GetAnchorType") ~= "ANCHOR_NONE"
+            or not UpdateCursorAnchor(tooltip, state) then
             StopCursorAnchor(tooltip)
-            return
         end
-        local currentScale = addon:SafeMethod(UIParent, "GetEffectiveScale")
-        SetCursorPoint(tooltip, point, offsetX, offsetY, currentScale)
     end)
-    states[tooltip] = state
-end
-
-local function CursorQuadrant()
-    local cursorX, cursorY = GetCursorPosition()
-    local width, height = GetScreenWidth(), GetScreenHeight()
-    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
-    if not addon:CanAccessAllValues(cursorX, cursorY, width, height, scale)
-        or type(cursorX) ~= "number" or type(cursorY) ~= "number"
-        or type(width) ~= "number" or type(height) ~= "number"
-        or type(scale) ~= "number" or scale <= 0 then
-        return "BOTTOMLEFT"
-    end
-
-    cursorX, cursorY = cursorX / scale, cursorY / scale
-    if cursorX > width / 2 then
-        return cursorY > height / 2 and "TOPRIGHT" or "BOTTOMRIGHT"
-    end
-    return cursorY > height / 2 and "TOPLEFT" or "BOTTOMLEFT"
-end
-
-local function AnchorAuto(tooltip, offsetX, offsetY)
-    local quadrant = CursorQuadrant()
-    local point = "BOTTOMLEFT"
-    offsetX, offsetY = tonumber(offsetX) or 0, tonumber(offsetY) or 20
-
-    if quadrant == "TOPRIGHT" then
-        point, offsetX, offsetY = "TOPRIGHT", offsetX - 10, offsetY - 10
-    elseif quadrant == "TOPLEFT" then
-        point, offsetX, offsetY = "TOPLEFT", offsetX + 10, offsetY - 10
-    elseif quadrant == "BOTTOMRIGHT" then
-        point, offsetX, offsetY = "BOTTOMRIGHT", offsetX - 10, offsetY + 10
-    else
-        point, offsetX, offsetY = "BOTTOMLEFT", offsetX + 10, offsetY + 10
-    end
-    AnchorToCursor(tooltip, point, offsetX, offsetY)
 end
 
 local function AnchorDefault(tooltip, parent, anchor, finalPass)
@@ -135,10 +115,10 @@ local function ApplyAnchor(tooltip, parent, anchor, isUnitFrame, finalPass)
         LibEvent:trigger("tooltip.anchor.cursor.right", tooltip, parent, anchor.cx, anchor.cy)
     elseif position == "cursor" then
         addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_NONE")
-        AnchorToCursor(tooltip, anchor.cp, anchor.cx, anchor.cy)
+        StartCursorAnchor(tooltip, "cursor", anchor.cp, anchor.cx, anchor.cy)
     elseif position == "auto" then
         addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_NONE")
-        AnchorAuto(tooltip, anchor.cx, anchor.cy)
+        StartCursorAnchor(tooltip, "auto", nil, anchor.cx, anchor.cy)
     elseif position == "inherit" and not finalPass then
         local general = addon.db and addon.db.general
         ApplyAnchor(tooltip, parent, general and general.anchor, isUnitFrame, true)

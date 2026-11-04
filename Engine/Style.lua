@@ -7,7 +7,6 @@
 
 local _, addon = ...
 local LibEvent = addon.LibEvent
-local LibMedia = LibStub and LibStub:GetLibrary("LibSharedMedia-3.0", true)
 
 local WHITE_TEXTURE = "Interface\\Buttons\\WHITE8X8"
 local DEFAULT_BACKGROUND = "Interface\\RaidFrame\\UI-RaidFrame-GroupBg"
@@ -108,15 +107,17 @@ end
 function addon:GetTooltipStyle(tooltip)
     if not self:IsTooltipSafe(tooltip) then return nil end
     local style = StyleByTooltip[tooltip]
+    if style == nil then return nil end
     if Accessible(style) then return style end
-    StyleByTooltip[tooltip] = nil
 end
 
 function addon:GetBigFactionIcon(tooltip, create)
     if not self:IsTooltipSafe(tooltip) then return nil end
     local icon = FactionIconByTooltip[tooltip]
-    if Accessible(icon) then return icon end
-    FactionIconByTooltip[tooltip] = nil
+    if icon ~= nil then
+        if Accessible(icon) then return icon end
+        return nil
+    end
     if create ~= true or not CanCreateVisual(tooltip) then return nil end
 
     local identity = self:SafeGet(tooltip, "identity")
@@ -288,7 +289,7 @@ local function InstallStyleMethods(style)
 end
 
 local function CreateStyle(tooltip)
-    if not CanCreateVisual(tooltip) then return nil end
+    if StyleByTooltip[tooltip] ~= nil or not CanCreateVisual(tooltip) then return nil end
     local ok, style = pcall(CreateFrame, "Frame", nil, tooltip)
     if not ok or not Accessible(style) then return nil end
 
@@ -474,11 +475,7 @@ LibEvent:attachTrigger("tooltip.style.border.size", function(_, tooltip, size)
 end)
 
 local function ResolveBorder(value)
-    if type(value) == "string" and LibMedia and LibMedia:IsValid("border", value) then
-        local ok, resolved = pcall(LibMedia.Fetch, LibMedia, "border", value)
-        if ok and type(resolved) == "string" then return resolved end
-    end
-    return WHITE_TEXTURE
+    return addon:GetSharedMediaFile("border", value) or WHITE_TEXTURE
 end
 
 LibEvent:attachTrigger("tooltip.style.border.corner", function(_, tooltip, corner)

@@ -154,17 +154,27 @@ local function RebuildMedia()
     AddUnique(media.font, { "default", "ChatFontNormal", "GameFontNormal", "QuestFont", "CombatLogFont" })
     AddUnique(media.statusbar, { "Interface\\AddOns\\RothTooltip\\texture\\StatusBar" })
 
-    local sharedMedia = LibStub and LibStub:GetLibrary("LibSharedMedia-3.0", true)
-    if sharedMedia then
-        AddUnique(media.background, sharedMedia:List("background"))
-        AddUnique(media.border, sharedMedia:List("border"))
-        AddUnique(media.font, sharedMedia:List("font"))
-        AddUnique(media.statusbar, sharedMedia:List("statusbar"))
+    local sharedMedia
+    if LibStub and type(LibStub.GetLibrary) == "function" then
+        local ok, library = pcall(LibStub.GetLibrary, LibStub, "LibSharedMedia-3.0", true)
+        if ok and type(library) == "table" then sharedMedia = library end
     end
+    if sharedMedia and type(sharedMedia.List) == "function" then
+        for kind, values in pairs(media) do
+            local ok, listed = pcall(sharedMedia.List, sharedMedia, kind)
+            if ok and type(listed) == "table" then AddUnique(values, listed) end
+        end
+    end
+end
+
+local function IsMediaOptions(values)
+    for _, candidates in pairs(media) do if values == candidates then return true end end
+    return false
 end
 
 local function TextOptions(values)
     return function()
+        if IsMediaOptions(values) then RebuildMedia() end
         local container = Settings.CreateControlTextContainer()
         for _, value in ipairs(values or EMPTY) do container:Add(value, OptionText(value)) end
         return container:GetData()
@@ -178,7 +188,7 @@ local function AddSection(layout, title, tooltip)
 end
 
 local function Checkbox(category, keystring, label, tooltip)
-    local default = Options:GetVariable(keystring) == true
+    local default = Options:GetDefaultValue(keystring) == true
     local setting = Settings.RegisterProxySetting(
         category,
         Options:MakeSettingName(keystring),
@@ -192,14 +202,14 @@ local function Checkbox(category, keystring, label, tooltip)
 end
 
 local function Slider(category, keystring, label, minimum, maximum, step, tooltip, fallback)
-    local current = tonumber(Options:GetVariable(keystring)) or fallback or minimum
+    local default = tonumber(Options:GetDefaultValue(keystring)) or fallback or minimum
     local setting = Settings.RegisterProxySetting(
         category,
         Options:MakeSettingName(keystring),
         Settings.VarType.Number,
         label,
-        current,
-        function() return tonumber(Options:GetVariable(keystring)) or current end,
+        default,
+        function() return tonumber(Options:GetVariable(keystring)) or default end,
         function(value)
             if step and step < 1 then
                 local precision = step < 0.1 and 2 or 1
@@ -225,21 +235,21 @@ local function Slider(category, keystring, label, minimum, maximum, step, toolti
 end
 
 local function Dropdown(category, keystring, label, values, tooltip, fallback)
-    fallback = fallback or values[1]
+    local default = Options:GetDefaultValue(keystring) or fallback or values[1]
     local setting = Settings.RegisterProxySetting(
         category,
         Options:MakeSettingName(keystring),
         Settings.VarType.String,
         label,
-        tostring(fallback),
-        function() return tostring(Options:GetVariable(keystring) or fallback) end,
+        tostring(default),
+        function() return tostring(Options:GetVariable(keystring) or default) end,
         function(value) Options:SetVariable(keystring, value) end
     )
     return Settings.CreateDropdown(category, setting, TextOptions(values), tooltip)
 end
 
 local function MixedDropdown(category, keystring, label, values, tooltip)
-    local fallback = tostring(values[1])
+    local default = tostring(Options:GetDefaultValue(keystring) or values[1])
     local options = function()
         local container = Settings.CreateControlTextContainer()
         for _, value in ipairs(values) do container:Add(tostring(value), OptionText(value)) end
@@ -250,21 +260,22 @@ local function MixedDropdown(category, keystring, label, values, tooltip)
         Options:MakeSettingName(keystring),
         Settings.VarType.String,
         label,
-        fallback,
-        function() return tostring(Options:GetVariable(keystring) or fallback) end,
+        default,
+        function() return tostring(Options:GetVariable(keystring) or default) end,
         function(value) Options:SetVariable(keystring, tonumber(value) or value) end
     )
     return Settings.CreateDropdown(category, setting, options, tooltip)
 end
 
 local function ColorSwatch(category, keystring, label, tooltip)
+    local default = Options:GetDefaultValue(keystring)
     local setting = Settings.RegisterProxySetting(
         category,
         Options:MakeSettingName(keystring, "RGB"),
         Settings.VarType.String,
         label,
-        SettingsColor(Options:GetVariable(keystring)),
-        function() return SettingsColor(Options:GetVariable(keystring)) end,
+        SettingsColor(default),
+        function() return SettingsColor(Options:GetVariable(keystring) or default) end,
         function(value)
             local red, green, blue = addon:GetRGBColor(value)
             Options:SetVariable(keystring, { red, green, blue, StoredAlpha(Options:GetVariable(keystring)) })
@@ -274,13 +285,14 @@ local function ColorSwatch(category, keystring, label, tooltip)
 end
 
 local function AlphaSlider(category, keystring, label, tooltip)
+    local default = Options:GetDefaultValue(keystring)
     local setting = Settings.RegisterProxySetting(
         category,
         Options:MakeSettingName(keystring, "ALPHA"),
         Settings.VarType.Number,
         label,
-        1,
-        function() return StoredAlpha(Options:GetVariable(keystring)) end,
+        StoredAlpha(default),
+        function() return StoredAlpha(Options:GetVariable(keystring) or default) end,
         function(value)
             local current = Options:GetVariable(keystring)
             local red, green, blue = 1, 1, 1
@@ -348,18 +360,19 @@ local function Button(layout, name, text, callback, tooltip)
     return initializer
 end
 
-local function ElementColorMode(keystring)
-    local value = Options:GetVariable(keystring)
+local function ElementColorMode(keystring, value)
+    if value == nil then value = Options:GetVariable(keystring) end
     return IsHex(value) and CUSTOM_COLOR or tostring(value or "default")
 end
 
 local function ElementColorDropdown(category, keystring, label)
+    local default = ElementColorMode(keystring, Options:GetDefaultValue(keystring))
     local setting = Settings.RegisterProxySetting(
         category,
         Options:MakeSettingName(keystring, "MODE"),
         Settings.VarType.String,
         label,
-        "default",
+        default,
         function() return ElementColorMode(keystring) end,
         function(value)
             if value == CUSTOM_COLOR then
@@ -374,14 +387,19 @@ local function ElementColorDropdown(category, keystring, label)
 end
 
 local function ElementColorSwatch(category, keystring, label, parent)
+    local default = SettingsColor(Options:GetDefaultValue(keystring))
     local setting = Settings.RegisterProxySetting(
         category,
         Options:MakeSettingName(keystring, "CUSTOM"),
         Settings.VarType.String,
         label,
-        "FFFFFFFF",
-        function() return SettingsColor(Options:GetVariable(keystring)) end,
-        function(value) Options:SetVariable(keystring, strlower(RGBHex(value) or "ffffff")) end
+        default,
+        function() return SettingsColor(Options:GetVariable(keystring) or Options:GetDefaultValue(keystring)) end,
+        function(value)
+            if ElementColorMode(keystring) == CUSTOM_COLOR then
+                Options:SetVariable(keystring, strlower(RGBHex(value) or "ffffff"))
+            end
+        end
     )
     local initializer = Settings.CreateColorSwatch(category, setting)
     if parent and initializer.SetParentInitializer then

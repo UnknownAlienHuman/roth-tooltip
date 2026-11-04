@@ -33,7 +33,6 @@ function addon:GetStatusBarText(bar)
     if not self:IsObjectAccessible(bar) then return nil end
     local text = StatusTextByBar[bar]
     if self:IsObjectAccessible(text) then return text end
-    StatusTextByBar[bar] = nil
 end
 
 local function ResolveStatusBarUnit()
@@ -175,7 +174,7 @@ local function SetupStatusBar()
     end
 
     local general = addon.db and addon.db.general or {}
-    if not addon:IsObjectAccessible(StatusTextByBar[bar]) then
+    if StatusTextByBar[bar] == nil then
         local text = addon:SafeMethod(bar, "CreateFontString", nil, "OVERLAY")
         if addon:IsObjectAccessible(text) then
             StatusTextByBar[bar] = text
@@ -234,10 +233,6 @@ end
 function addon:IsUsingCharacterProfile()
     return type(RothTooltipDB) == "table" and type(RothTooltipDB.general) == "table"
         and RothTooltipDB.general.SavedVariablesPerCharacter == true
-end
-
-function addon:GetActiveProfileStore()
-    return self:IsUsingCharacterProfile() and RothTooltipCharacterDB or RothTooltipDB
 end
 
 function addon:SelectSavedVariableScope(useCharacter)

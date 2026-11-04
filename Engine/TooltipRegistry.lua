@@ -34,13 +34,13 @@ function addon:IsManagedTooltip(tooltip)
 end
 
 function addon:RegisterTooltipFrame(tooltip)
-    if not self:IsTooltipSafe(tooltip) then return false end
+    if not self:IsTooltipSafe(tooltip) then return false, false end
     self.tooltipSet = self.tooltipSet or setmetatable({}, { __mode = "k" })
-    if self.tooltipSet[tooltip] then return true end
+    if self.tooltipSet[tooltip] then return true, false end
 
     self.tooltipSet[tooltip] = true
     LibEvent:trigger("tooltip:init", tooltip)
-    return true
+    return true, true
 end
 
 function addon:UnregisterTooltipFrame(tooltip)

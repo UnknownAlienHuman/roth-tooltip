@@ -1,6 +1,5 @@
 local _, addon = ...
 local LibEvent = addon.LibEvent
-local function Call(fn, ...) return addon:SafeCall("Unit", fn, ...) end
 local function IsOrdinaryUnit(unit)
     return addon:CanAccessValue(unit) and type(unit) == "string" and unit ~= ""
         and not addon:IsUnitIdentityRestricted(unit)

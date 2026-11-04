@@ -69,7 +69,8 @@ local function FullSetup(account, character, locale)
         for _, method in ipairs({ "SetFont", "SetShadowOffset", "SetShadowColor", "SetTextColor", "SetClampedToScreen",
             "SetFrameStrata", "SetStatusBarColor", "SetStatusBarTexture", "SetMovable", "EnableMouse", "RegisterForDrag",
             "SetMaxLetters", "SetAutoFocus", "SetMultiLine", "SetFontObject", "HighlightText", "SetFocus", "ClearFocus",
-            "StartMoving", "StopMovingOrSizing", "SetScrollChild", "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor" }) do
+            "StartMoving", "StopMovingOrSizing", "SetScrollChild", "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor",
+            "SetColorTexture" }) do
             f[method] = function() end
         end
         if template == "RothTooltipVariablesTemplate" then
@@ -150,17 +151,21 @@ local function FullSetup(account, character, locale)
     C_MountJournal = { GetMountIDs = function() return {} end }
     EXPANSION_NAME0, EXPANSION_NAME10 = "Classic", "Expansion"
     AbbreviateLargeNumbers = tostring
-    C_Timer = { NewTicker = function(interval, callback)
-        local timer = { interval = interval, callback = callback, cancelled = false }
+    local function NewTimer(kind, interval, callback)
+        local timer = { kind = kind, interval = interval, callback = callback, cancelled = false }
         function timer:Cancel() self.cancelled = true end
         state.timers[#state.timers + 1] = timer
         return timer
-    end }
+    end
+    C_Timer = {
+        NewTicker = function(interval, callback) return NewTimer("ticker", interval, callback) end,
+        NewTimer = function(interval, callback) return NewTimer("timer", interval, callback) end,
+    }
     local pre, post = {}, {}
     TooltipDataProcessor = { AllTypes = "ALL",
         AddTooltipPreCall = function(kind, fn) assert(kind == "ALL"); pre[#pre + 1] = fn end,
         AddTooltipPostCall = function(kind, fn) assert(kind == "ALL"); post[#post + 1] = fn end }
-    local categories = test.MockSettings()
+    local categories, settings = test.MockSettings()
     local addon, loaded = {}, {}
     RothTooltipDB, RothTooltipCharacterDB = nil, nil
     local function LoadPath(path)
@@ -180,7 +185,8 @@ local function FullSetup(account, character, locale)
     assert(loaded["locales/enUS.lua"] and loaded["Options.lua"])
     RothTooltipDB, RothTooltipCharacterDB = account, character
     addon.LibEvent:event("ADDON_LOADED", "RothTooltip")
-    state.addon, state.pre, state.post, state.hooks, state.categories = addon, pre, post, hooks, categories
+    state.addon, state.pre, state.post, state.hooks, state.categories, state.settings =
+        addon, pre, post, hooks, categories, settings
     function state:Display(data, getter)
         GameTooltip:SetMockData(data, getter)
         for _, fn in ipairs(pre) do if fn(GameTooltip, data) then return false end end
@@ -508,6 +514,185 @@ Check("base expansion ID zero is rendered", function()
         "GetItemByID")
     local line = s.addon:FindLine(GameTooltip, "Classic")
     assert(line ~= nil)
+    s:NoErrors()
+end)
+Check("Settings defaults come from the canonical schema, not the active profile", function()
+    local s = FullSetup({ general = { scale = 2, statusbarText = false }, modules = { Model = false } })
+    assert(s.settings.ROTH_TOOLTIP_GENERAL_SCALE.default == 1)
+    assert(s.settings.ROTH_TOOLTIP_GENERAL_STATUSBARTEXT.default == true)
+    assert(s.settings.ROTH_TOOLTIP_GENERAL_STATUSBARFONT.default == "default")
+    assert(s.settings.ROTH_TOOLTIP_GENERAL_ANCHOR_X.default == 0)
+    assert(s.settings.ROTH_TOOLTIP_MODULES_MODEL.default == true)
+    s:NoErrors()
+end)
+Check("legacy profile exceptions are exact paths, not broad leaf names", function()
+    local s = FullSetup(); local original = s.addon.db
+    assert(s.addon:ImportProfile({ variables = { old = true }, unit = {
+        player = { showTargetBy = true }, npc = { showTargetBy = true } } }))
+    assert(s.addon.db.variables == nil and s.addon.db.unit.player.showTargetBy == nil)
+    local accepted = s.addon.db
+    assert(not s.addon:ImportProfile({ general = { showTargetBy = true } }))
+    assert(s.addon.db == accepted)
+    assert(not s.addon:ImportProfile({ item = { legacyAuraFallback = true } }))
+    assert(s.addon.db == accepted and s.addon.db ~= original)
+    s:NoErrors()
+end)
+Check("live wildcard writes use the same bounded validator as imports", function()
+    local s = FullSetup()
+    local key = "unit.player.elements.name.wildcard"
+    local original = s.addon.Options:GetVariable(key)
+    assert(not s.addon.Options:SetVariable(key, "%999999s"))
+    assert(s.addon.Options:GetVariable(key) == original)
+    assert(s.addon.Options:SetVariable(key, "[%s]"))
+    assert(s.addon.Options:GetVariable(key) == "[%s]")
+    s:NoErrors()
+end)
+Check("temporary status text denial does not create a replacement", function()
+    local s = FullSetup()
+    local text = s.addon:GetStatusBarText(GameTooltipStatusBar)
+    assert(text)
+    local count = #s.frames
+    text.inaccessible = true
+    s.addon.LibEvent:event("PLAYER_REGEN_ENABLED")
+    assert(#s.frames == count and s.addon:GetStatusBarText(GameTooltipStatusBar) == nil)
+    text.inaccessible = false
+    assert(s.addon:GetStatusBarText(GameTooltipStatusBar) == text)
+    s:NoErrors()
+end)
+Check("inspect completion cancels its owned timeout", function()
+    local s = FullSetup(); s:Display(s:UnitData())
+    local timer = s.timers[#s.timers]
+    assert(timer and timer.kind == "timer" and not timer.cancelled)
+    s.addon.LibEvent:event("INSPECT_READY", s.guid)
+    assert(timer.cancelled and GameTooltip.setUnits == 1)
+    s:NoErrors()
+end)
+Check("inspect timeout releases the request without touching the global channel", function()
+    local s = FullSetup(); s:Display(s:UnitData())
+    local timer = s.timers[#s.timers]
+    timer.callback()
+    test.SetClock(3); s:Display(s:UnitData())
+    assert(s.requests == 2 and s.clears == 0 and timer.cancelled)
+    s:NoErrors()
+end)
+Check("stale inspect timeout cannot cancel a replacement request", function()
+    local s = FullSetup(); s:Display(s:UnitData())
+    local first = s.timers[#s.timers]
+    test.SetClock(6); s:Display(s:UnitData())
+    local second = s.timers[#s.timers]
+    assert(first ~= second and first.cancelled and not second.cancelled)
+    first.callback()
+    assert(not second.cancelled)
+    s.addon.LibEvent:event("INSPECT_READY", s.guid)
+    assert(second.cancelled and GameTooltip.setUnits == 1)
+    s:NoErrors()
+end)
+Check("direct unit normalization stops before APIs when stats are restricted", function()
+    local s = FullSetup(); local calls = 0
+    C_Secrets.ShouldUnitIdentityBeSecret = function() return false end
+    C_Secrets.ShouldUnitStatsBeSecret = function() return true end
+    UnitName = function() calls = calls + 1; return "Unsafe" end
+    assert(s.addon:GetUnitInfo("target", s.addon.db.unit.player.elements) == nil and calls == 0)
+    s:NoErrors()
+end)
+Check("profile decoder rejects inaccessible and metatable-bearing documents", function()
+    local s = FullSetup(); s.addon.Options:OpenProfileDialog()
+    local dialog, original = s.addon.__RTVariablesDialog, s.addon.db
+    C_EncodingUtil = { DeserializeJSON = function() return secret end }
+    dialog.textarea.text:SetText("{}"); dialog.import:Fire("OnClick")
+    assert(s.addon.db == original)
+    C_EncodingUtil.DeserializeJSON = function() return setmetatable({}, {}) end
+    dialog.import:Fire("OnClick")
+    assert(s.addon.db == original)
+    s:NoErrors()
+end)
+Check("profile dialog remains single-owner across temporary access denial", function()
+    local s = FullSetup(); s.addon.Options:OpenProfileDialog()
+    local dialog, count = s.addon.__RTVariablesDialog, #s.frames
+    dialog.inaccessible = true
+    s.addon.Options:OpenProfileDialog()
+    assert(#s.frames == count and s.addon.__RTVariablesDialog == dialog)
+    dialog.inaccessible = false
+    s.addon.Options:OpenProfileDialog()
+    assert(#s.frames == count and s.addon.__RTVariablesDialog == dialog)
+    s:NoErrors()
+end)
+Check("DIY layout stays within sixteen rows and preview remains single-owner", function()
+    local s = FullSetup(); local elements = s.addon.db.unit.player.elements
+    local keys = { "name", "realm", "levelValue", "className", "raceName", "guildName", "guildRank",
+        "guildRealm", "factionName", "gender", "isPlayer", "role", "moveSpeed", "zone", "title", "statusAFK", "statusDND" }
+    for index = #elements, 1, -1 do elements[index] = nil end
+    elements[1] = { keys[1], keys[2] }
+    for index = 2, 16 do elements[index] = { keys[index + 1] } end
+    s.addon.Options:OpenDIYEditor()
+    local preview = s.addon.Options.DIY
+    local element = assert(preview.elements.name)
+    element:Fire("OnDragStart")
+    preview.overLine = { line = 99 }
+    element:Fire("OnDragStop")
+    assert(#elements == 16)
+    local found = false
+    for _, row in ipairs(elements) do for _, key in ipairs(row) do if key == "name" then found = true end end end
+    assert(found)
+    local frame, count = preview.frame, #s.frames
+    frame.inaccessible = true; s.addon.Options:OpenDIYEditor()
+    assert(#s.frames == count and preview.frame == frame)
+    frame.inaccessible = false
+    s:NoErrors()
+end)
+Check("DIY drag is atomic across combat entry", function()
+    local s = FullSetup(); s.addon.Options:OpenDIYEditor()
+    local preview, rows = s.addon.Options.DIY, s.addon.db.unit.player.elements
+    local before = table.concat(rows[1], ",")
+    local element = assert(preview.elements.name)
+    element:Fire("OnDragStart"); preview.overLine = { line = 4 }
+    InCombatLockdown = function() return true end
+    element:Fire("OnDragStop")
+    assert(table.concat(rows[1], ",") == before and preview.dragging == nil)
+    s:NoErrors()
+end)
+Check("DIY stale drag cannot mutate a replacement profile", function()
+    local s = FullSetup(); s.addon.Options:OpenDIYEditor()
+    local preview = s.addon.Options.DIY
+    local element = assert(preview.elements.name)
+    element:Fire("OnDragStart")
+    assert(s.addon:ImportProfile({ unit = { player = { elements = {
+        ["1"] = { "name", "realm" }, ["2"] = { "levelValue" } } } } }))
+    local rows = s.addon.db.unit.player.elements
+    local before = table.concat(rows[1], ",") .. ";" .. table.concat(rows[2], ",")
+    preview.overLine = { line = 9 }; element:Fire("OnDragStop")
+    assert(table.concat(rows[1], ",") .. ";" .. table.concat(rows[2], ",") == before)
+    s:NoErrors()
+end)
+Check("auto cursor anchor uses UIParent coordinates and follows quadrant changes", function()
+    local s = FullSetup(); local cursorX, cursorY = 300, 400
+    GetCursorPosition = function() return cursorX, cursorY end
+    UIParent:SetSize(1000, 800); UIParent.scale = 2
+    local config = s.addon.db.general.anchor
+    config.position, config.returnInCombat, config.cx, config.cy = "auto", false, 0, 20
+    GameTooltip.owner = UIParent
+    s.addon.LibEvent:trigger("tooltip:anchor", GameTooltip, UIParent)
+    local timer = s.timers[#s.timers]
+    assert(GameTooltip.points[1] == "BOTTOMLEFT" and GameTooltip.points[4] == 160 and GameTooltip.points[5] == 230)
+    cursorX, cursorY = 1800, 1400; timer.callback()
+    assert(GameTooltip.points[1] == "TOPRIGHT" and GameTooltip.points[4] == 890 and GameTooltip.points[5] == 710)
+    s:NoErrors()
+end)
+Check("SkinFrames releases only registry entries it actually added", function()
+    local s = FullSetup()
+    local existing = CreateFrame("GameTooltip")
+    local ok, added = s.addon:RegisterTooltipFrame(existing)
+    assert(ok and added)
+    AtlasLootTooltip = existing
+    s.addon.LibEvent:trigger("tooltip:variable:changed", "general.skinMoreFrames", true)
+    local owned = CreateFrame("GameTooltip")
+    FriendsTooltip = owned
+    s.addon.LibEvent:trigger("tooltip:variable:changed", "general.skinMoreFrames", true)
+    local okAgain, addedAgain = s.addon:RegisterTooltipFrame(existing)
+    assert(okAgain and not addedAgain and s.addon:IsManagedTooltip(owned))
+    assert(s.addon:DisableModule("SkinFrames"))
+    assert(s.addon:IsManagedTooltip(existing) and not s.addon.tooltipSet[owned])
+    AtlasLootTooltip, FriendsTooltip = nil, nil
     s:NoErrors()
 end)
 print(string.format("PASS: %d tests (%s), including complete TOC Lua bootstrap; native client NOT-RUN", test.Count(), _VERSION))

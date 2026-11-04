@@ -38,6 +38,9 @@ OBSOLETE_PATHS = [
     ".github/workflows/audit-source-export.yml",
     ".github/workflows/audit-donors-export.yml",
     ".github/workflows/apply-single-runtime.yml",
+    ".github/workflows/audit-pass3-export.yml",
+    ".github/workflows/export-pass3-baseline.yml",
+    ".audit-transfer",
     ".refactor_payload",
 ]
 
@@ -266,6 +269,9 @@ def validate_runtime_invariants() -> None:
     processor_raw, processor = read_lua("Engine/TooltipProcessor.lua")
     registry_raw, _ = read_lua("Engine/TooltipRegistry.lua")
     manager_raw, manager = read_lua("Engine/ModuleManager.lua")
+    unit_stats_raw, _ = read_lua("Engine/UnitStats.lua")
+    options_core_raw, _ = read_lua("Options/Core.lua")
+    profile_dialog_raw, _ = read_lua("Options/Profile.lua")
 
     if "canaccessvalue" not in safe_raw or "canaccessallvalues" not in safe_raw:
         fail("Safe.lua is missing Retail capability gates")
@@ -299,6 +305,14 @@ def validate_runtime_invariants() -> None:
         fail("dead variables defaults remain")
     if "order = {}" not in manager_raw or "ipairs(self.order)" not in manager:
         fail("module activation order is not deterministic")
+    if "bus.depth" not in manager_raw or "entry.pending" not in manager_raw:
+        fail("reentrant event-bus subscriptions are not transaction-isolated")
+    if "pendingInspectTimer" not in unit_stats_raw or "C_Timer.NewTimer" not in unit_stats_raw:
+        fail("inspect timeout is not owned and cancellable")
+    if "IsValidElementFormat" not in options_core_raw:
+        fail("live wildcard writes bypass the profile validator")
+    if "CanAccessTable(result)" not in profile_dialog_raw:
+        fail("decoded profile documents are not access-gated")
     for symbol in ("GetPrimaryTooltipContext", "RefreshTooltipSafe", "RegisterTooltipFrame", "NormalizeProfile"):
         if all_lua_code.count("function addon:" + symbol + "(") != 1:
             fail(f"expected one owner for {symbol}")

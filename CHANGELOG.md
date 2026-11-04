@@ -8,6 +8,18 @@
 - Remove the mutable global addon namespace, dead global lookup table and unused defaults.
 - Accept expansion ID 0 and run static checks automatically for pull requests.
 
+## Third-pass hardening — 2026-11-04
+
+- Give inspect requests an owned cancellable timeout; completion, replacement, restrictions and disable converge on one cleanup path without touching the global inspect target.
+- Isolate subscriptions created during nested event-bus dispatch until the outermost transaction ends; snapshot detach targets and bound retained error text.
+- Register Settings with canonical schema defaults rather than the active profile, and route live wildcard edits through the same bounded validator as imports.
+- Gate decoded profile documents before field access, preserve exact legacy-key exceptions only, and keep profile/diagnostic UI frames single-owned across temporary access denial.
+- Recompute cursor scale and automatic quadrant from current UIParent coordinates; bound DIY layout rows and reject combat/profile-stale drag commits.
+- Preserve style/status/registry ownership during temporary access denial, and make SkinFrames release only frames it actually added.
+- Resolve optional LibSharedMedia lazily, including libraries loaded after RothTooltip, and remove unused helpers/icons.
+- Route taint diagnostics through the private native event owner and cap diagnostic fields before retention/export.
+- Add 21 focused regressions; the complete Lua 5.1 suite now contains 121 tests.
+
 ## Development audit — 2026-11-03
 
 - Fresh, gated tooltip contexts; exact-source refresh and one modifier owner. Native item readiness and bag/action/comparison acquisition remain native.

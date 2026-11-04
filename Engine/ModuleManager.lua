@@ -1,6 +1,6 @@
 local _, addon = ...
 
-local bus = { events = {}, triggers = {} }
+local bus = { events = {}, triggers = {}, depth = 0, pending = {} }
 local MM = { modules = {}, order = {}, state = {}, core = { General = true }, _links = {},
     meta = setmetatable({}, { __mode = "k" }) }
 addon.LibEvent, addon.MM = bus, MM
@@ -35,7 +35,10 @@ function MM:OnError(fn, err)
     if not meta then return end
     local state = State(meta.module)
     state.errs = state.errs + 1
-    state.lastErr = addon:SafeToString(err, "<inaccessible error>")
+    local text = addon:SafeToString(err, "<inaccessible error>")
+    state.lastErr = type(text) == "string"
+        and (#text > 1024 and text:sub(1, 1021) .. "..." or text)
+        or "<inaccessible error>"
     state.lastHook, state.lastAt = meta.hook, Now()
     return meta.module, meta.hook
 end
@@ -90,6 +93,10 @@ local function Subscribe(bucket, name, fn, owner, hook)
         if entry.active and entry.fn == fn and entry.owner == owner then return end
     end
     local entry = { fn = fn, owner = owner, hook = hook, active = true, list = list }
+    if bus.depth > 0 then
+        entry.pending = true
+        bus.pending[#bus.pending + 1] = entry
+    end
     list[#list + 1], list.count = entry, list.count + 1
     return entry
 end
@@ -125,7 +132,9 @@ local function Detach(bucket, names, fn)
         Compact(list)
     end
     if type(names) == "function" then
-        for _, list in pairs(bucket) do Clear(list, names) end
+        local lists = {}
+        for _, list in pairs(bucket) do lists[#lists + 1] = list end
+        for _, list in ipairs(lists) do Clear(list, names) end
     elseif type(names) == "string" then
         for name in names:gmatch("[^,%s]+") do Clear(bucket[name], fn) end
     end
@@ -150,12 +159,13 @@ end
 local function Dispatch(bucket, name, ...)
     local list = bucket[name]
     if not list then return end
-    list.depth = list.depth + 1
-    -- Additions wait until the next dispatch; removals take effect immediately.
+    bus.depth, list.depth = bus.depth + 1, list.depth + 1
+    -- Subscriptions created by any nested dispatch wait until the outermost
+    -- transaction ends; removals still take effect immediately.
     local limit = #list
     for index = 1, limit do
         local entry = list[index]
-        if entry.active and (not entry.owner or MM:IsEnabled(entry.owner))
+        if entry.active and not entry.pending and (not entry.owner or MM:IsEnabled(entry.owner))
             and (not entry.mutedUntil or entry.mutedUntil <= Now()) then
             local started = entry.owner and MM:OnCallStart(entry.owner, entry.hook)
             local ok, err = pcall(entry.fn, entry.fn, ...)
@@ -171,8 +181,14 @@ local function Dispatch(bucket, name, ...)
             end
         end
     end
-    list.depth = list.depth - 1
+    list.depth, bus.depth = list.depth - 1, bus.depth - 1
     Compact(list)
+    if bus.depth == 0 and #bus.pending > 0 then
+        for _, entry in ipairs(bus.pending) do
+            if entry.active then entry.pending = nil end
+        end
+        for index = #bus.pending, 1, -1 do bus.pending[index] = nil end
+    end
 end
 
 function bus:addEventListener(names, fn) Attach(self.events, names, fn); return self end

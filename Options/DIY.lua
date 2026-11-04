@@ -9,6 +9,7 @@ local Preview = {
     lines = {},
     elements = {},
     dragging = nil,
+    dragRows = nil,
     overButton = nil,
     overLine = nil,
     accumulator = 0,
@@ -52,10 +53,22 @@ local function CreateDropLine(frame, lineNumber)
 end
 
 local function ClearHighlights()
-    for _, line in ipairs(Preview.lines) do line:SetAlpha(0) end
+    for _, line in ipairs(Preview.lines) do addon:SafeMethod(line, "SetAlpha", 0) end
     for _, element in pairs(Preview.elements) do
-        if element.vbar then element.vbar:Hide() end
+        if element.vbar then addon:SafeMethod(element.vbar, "Hide") end
     end
+end
+
+local function ResetDrag(element)
+    element = element or Preview.dragging
+    if element and addon:IsObjectAccessible(element) then addon:SafeMethod(element, "StopMovingOrSizing") end
+    Preview.dragging = nil
+    Preview.dragRows = nil
+    Preview.overButton = nil
+    Preview.overLine = nil
+    Preview.accumulator = 0
+    if Preview.frame then addon:SafeMethod(Preview.frame, "SetScript", "OnUpdate", nil) end
+    ClearHighlights()
 end
 
 local function RemoveElementFromRows(rows, elementKey)
@@ -104,55 +117,63 @@ end
 
 local function FinishDrag(element)
     local rows = Elements()
-    if type(rows) ~= "table" then return end
+    if type(rows) ~= "table" or rows ~= Preview.dragRows or InCombatLockdown() then
+        ResetDrag(element)
+        if addon:IsObjectAccessible(Preview.frame) then Preview:Render() end
+        return
+    end
 
-    element:StopMovingOrSizing()
+    addon:SafeMethod(element, "StopMovingOrSizing")
     RemoveElementFromRows(rows, element.key)
 
     if Preview.overButton then
+        local targetKey = Preview.overButton.key
         for _, row in ipairs(rows) do
             for index = 1, #row do
-                if row[index] == Preview.overButton.key then
+                if row[index] == targetKey then
                     table.insert(row, index, element.key)
-                    Preview.overButton = nil
+                    targetKey = nil
                     break
                 end
             end
-            if not Preview.overButton then break end
+            if not targetKey then break end
         end
     elseif Preview.overLine then
-        local rowIndex = math.max(1, tonumber(Preview.overLine.line) or (#rows + 1))
+        local rowIndex = math.max(1, math.min(16, tonumber(Preview.overLine.line) or (#rows + 1)))
         rows[rowIndex] = rows[rowIndex] or {}
         table.insert(rows[rowIndex], element.key)
-    else
+    elseif #rows < 16 then
         rows[#rows + 1] = { element.key }
+    else
+        rows[16] = rows[16] or {}
+        table.insert(rows[16], element.key)
     end
 
     CompactRows(rows)
-    Preview.dragging = nil
-    Preview.overButton = nil
-    Preview.overLine = nil
-    Preview.accumulator = 0
-    if Preview.frame then Preview.frame:SetScript("OnUpdate", nil) end
-    ClearHighlights()
-
+    ResetDrag(element)
     LibEvent:trigger("tooltip:variable:changed", "unit.player.elements", rows)
     Options:RefreshShownTooltips("player-layout")
     Preview:Render()
 end
 
 local function StartDrag(element)
-    if not Preview.frame then return end
+    if not Preview.frame or InCombatLockdown() then return end
+    local rows = Elements()
+    if type(rows) ~= "table" then return end
     Preview.dragging = element
+    Preview.dragRows = rows
     Preview.overButton = nil
     Preview.overLine = nil
     Preview.accumulator = 0
 
     local cursorX, cursorY = GetCursorPosition()
-    local scale = UIParent:GetEffectiveScale()
-    element:StartMoving()
-    element:ClearAllPoints()
-    element:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cursorX / scale, cursorY / scale)
+    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
+    if not addon:CanAccessAllValues(cursorX, cursorY, scale)
+        or type(cursorX) ~= "number" or type(cursorY) ~= "number"
+        or type(scale) ~= "number" or scale <= 0 then ResetDrag(element); return end
+    addon:SafeMethod(element, "StartMoving")
+    addon:SafeMethod(element, "ClearAllPoints")
+    addon:SafeMethod(element, "SetPoint", "CENTER", UIParent, "BOTTOMLEFT", cursorX / scale, cursorY / scale)
     Preview.frame:SetScript("OnUpdate", UpdateDragTargets)
 end
 
@@ -229,7 +250,7 @@ function Preview:Render()
         visibleRows = rowIndex
     end
 
-    local dropRow = visibleRows + 1
+    local dropRow = math.min(16, visibleRows + 1)
     local totalWidth = math.max(180, maximumWidth)
     frame:SetWidth(totalWidth + 28)
     frame:SetHeight(dropRow * 24 + 40)
@@ -260,7 +281,10 @@ function Preview:Render()
 end
 
 local function CreatePreview()
-    if Preview.frame and addon:IsObjectAccessible(Preview.frame) then return Preview.frame end
+    if Preview.frame ~= nil then
+        if addon:IsObjectAccessible(Preview.frame) then return Preview.frame end
+        return nil
+    end
 
     local frame = CreateFrame("Frame", nil, UIParent)
     frame.identity = "diy"
@@ -274,13 +298,7 @@ local function CreatePreview()
     frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     frame:SetScript("OnShow", function() Preview:Render() end)
-    frame:SetScript("OnHide", function(self)
-        self:SetScript("OnUpdate", nil)
-        Preview.dragging = nil
-        Preview.overButton = nil
-        Preview.overLine = nil
-        ClearHighlights()
-    end)
+    frame:SetScript("OnHide", function() ResetDrag() end)
     frame:Hide()
 
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -304,6 +322,7 @@ function Options:OpenDIYEditor()
 end
 
 LibEvent:attachTrigger("tooltip:variables:loaded, tooltip:variable:changed", function()
+    ResetDrag()
     local frame = Preview.frame
-    if frame and frame:IsShown() then Preview:Render() end
+    if addon:IsObjectAccessible(frame) and addon:SafeMethod(frame, "IsShown") == true then Preview:Render() end
 end)

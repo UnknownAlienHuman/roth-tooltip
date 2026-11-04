@@ -219,6 +219,8 @@ end
 
 local inspectCache = {}
 local pendingInspectGUID
+local pendingInspectTimer
+local inspectGeneration = 0
 local foreignInspectUntil = 0
 local requestingInspect = false
 local inspectHooksInstalled = false
@@ -242,7 +244,14 @@ local function InspectUIOwnsChannel()
 end
 
 local function ClearPendingInspect()
+    inspectGeneration = inspectGeneration + 1
     pendingInspectGUID = nil
+    if pendingInspectTimer then
+        local timer = pendingInspectTimer
+        pendingInspectTimer = nil
+        local cancel = addon:SafeGet(timer, "Cancel")
+        if type(cancel) == "function" then pcall(cancel, timer) end
+    end
     -- ClearInspectPlayer has global ownership. Never clear somebody else's
     -- target, including on disable, timeout or restriction changes.
 end
@@ -281,7 +290,8 @@ local function RequestInspect(unit, guid, now)
     if InCombatLockdown() or addon:AreUnitStatsRestricted() or InspectUIOwnsChannel()
         or not inspectHooksInstalled or now < foreignInspectUntil then return end
     if type(CanInspect) ~= "function" or addon:SafeCallBoolean(CanInspect, unit) ~= true then return end
-    if type(NotifyInspect) ~= "function" then return end
+    if type(NotifyInspect) ~= "function" or not C_Timer
+        or type(C_Timer.NewTimer) ~= "function" then return end
 
     if pendingInspectGUID then
         if now - inspectLastRequest <= INSPECT_REQUEST_TIMEOUT then return end
@@ -290,8 +300,15 @@ local function RequestInspect(unit, guid, now)
     if now - inspectLastRequest <= INSPECT_REQUEST_THROTTLE then return end
 
     PruneTimedCache(inspectCache, now, INSPECT_CACHE_TTL, INSPECT_CACHE_MAX)
+    ClearPendingInspect()
     pendingInspectGUID = guid
     inspectLastRequest = now
+    local generation = inspectGeneration
+    pendingInspectTimer = C_Timer.NewTimer(INSPECT_REQUEST_TIMEOUT, function()
+        if generation == inspectGeneration and pendingInspectGUID == guid then ClearPendingInspect() end
+    end)
+    if not pendingInspectTimer then ClearPendingInspect(); return end
+
     requestingInspect = true
     local ok, message = pcall(NotifyInspect, unit)
     requestingInspect = false

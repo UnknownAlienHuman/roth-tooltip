@@ -25,10 +25,6 @@ function addon:CanAccessTable(value)
         and type(accessTable) == "function" and accessTable(value) == true
 end
 
-function addon:IsSecret(value)
-    return not self:CanAccessValue(value)
-end
-
 function addon:SafeBoolean(value)
     if not self:CanAccessValue(value) or value == nil then return nil end
     return not not value

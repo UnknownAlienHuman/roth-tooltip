@@ -39,7 +39,7 @@ function Options:SetNestedValue(target, keystring, value)
 end
 
 function Options:GetVariable(keystring, source)
-    if keystring == "general.SavedVariablesPerCharacter" then
+    if source == nil and keystring == "general.SavedVariablesPerCharacter" then
         return addon:IsUsingCharacterProfile() == true
     end
     if type(keystring) ~= "string" or keystring == "" then return nil end
@@ -50,6 +50,10 @@ function Options:GetVariable(keystring, source)
         value = value[key]
     end
     return value
+end
+
+function Options:GetDefaultValue(keystring)
+    return self:GetVariable(keystring, addon.__RT_DefaultDB)
 end
 
 function Options:ForEachManagedTooltip(callback)
@@ -140,6 +144,8 @@ function Options:ApplyRuntimeChange(keystring, value)
 end
 
 function Options:SetVariable(keystring, value, target)
+    if type(keystring) ~= "string" or keystring == "" then return false end
+    if keystring:find("%.wildcard$") and not addon:IsValidElementFormat(value) then return false end
     if keystring == "general.SavedVariablesPerCharacter" then
         local applied = addon:SelectSavedVariableScope(value == true)
         LibEvent:trigger("tooltip:variable:changed", keystring, addon:IsUsingCharacterProfile())

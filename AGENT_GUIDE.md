@@ -10,7 +10,7 @@ Use the [engineering KB task index](https://github.com/UnknownAlienHuman/wow-add
 - `Engine/ModuleManager.lua`: private `addon.LibEvent`, native events, subscriptions, module state and callback attribution. Do not install or modify a global LibStub/LibEvent replacement.
 - `Engine/Midnight.lua`: patch-sensitive fresh tooltip context, line access and refresh; it stores no context cache. `Engine/UnitInfo.lua` owns ordinary unit formatting and `Engine/UnitStats.lua` owns bounded enrichment. `Engine/TooltipProcessor.lua` is the single session-long native processor registration owner.
 - `Engine/TooltipRegistry.lua`: managed-frame membership. `Engine/Style.lua`: addon visuals and native backdrop hooks. Do not reintroduce backdrop hooks in Core or reapply base colors after feature processing.
-- `Engine/Profile.lua`: pure schema validation/migration. `General.lua`: active SavedVariables selection and status bar. `Config.lua`: defaults. Settings and slash commands must use the same module/profile APIs, not write a second runtime state.
+- `Engine/Profile.lua`: pure schema validation/migration and the shared wildcard validator. `General.lua`: active SavedVariables selection and status bar. `Config.lua`: canonical defaults. Settings must register defaults from that canonical schema; Settings and slash commands use the same module/profile APIs, not a second runtime state.
 
 The old bootstrap/override files are absent from this branch. Do not recreate a shadow implementation suppressed only by load order. Optional LibSharedMedia lookups must tolerate LibStub being absent.
 
@@ -18,7 +18,7 @@ The old bootstrap/override files are absent from this branch. Do not recreate a 
 
 Register each module once. Implement only lifecycle methods that do work; `Init`, `Enable` and `Disable` may be omitted. An explicit `false` or an error means failure. Optional initialization waits for the selected saved profile; General starts early to select it.
 
-Use `MM:AttachEvent` / `MM:AttachTrigger` during an enabled lifecycle. The manager owns subscription teardown. Callback arguments preserve the existing convention: the first argument is the callback itself, followed by the event payload. Removed callbacks stop immediately; new callbacks do not join an in-progress dispatch.
+Use `MM:AttachEvent` / `MM:AttachTrigger` during an enabled lifecycle. The manager owns subscription teardown. Callback arguments preserve the existing convention: the first argument is the callback itself, followed by the event payload. Removed callbacks stop immediately; subscriptions created during nested dispatch remain pending until the outermost dispatch completes.
 
 Feature owners must still cancel their timers, invalidate continuations and hide their visuals on disable. A native `hooksecurefunc`/processor cannot be detached; install it once and gate the persistent callback on current enabled state. Do not let delayed work resubscribe a disabled module.
 

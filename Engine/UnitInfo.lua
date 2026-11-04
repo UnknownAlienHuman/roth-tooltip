@@ -133,7 +133,7 @@ end
 
 function addon:GetUnitInfo(unit, elements)
     if not CanAccess(unit) or type(unit) ~= "string" or unit == ""
-        or self:IsUnitIdentityRestricted(unit) then return nil end
+        or self:IsUnitIdentityRestricted(unit) or self:AreUnitStatsRestricted() then return nil end
 
     local name, realm = Call(UnitName, unit)
     local level = Call(UnitLevel, unit)

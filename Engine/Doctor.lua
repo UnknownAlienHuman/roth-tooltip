@@ -1,14 +1,22 @@
 local addonName, addon = ...
 local errors = {}
 local MAX_ERRORS = 80
+local LIMITS = { kind = 64, where = 256, message = 1024, extra = 1024 }
+
+local function BoundedText(value, fallback, limit)
+    local text = addon:SafeToString(value, fallback)
+    if type(text) ~= "string" then return fallback end
+    if #text > limit then return text:sub(1, limit - 3) .. "..." end
+    return text
+end
 
 function addon:DoctorLog(kind, where, err, extra)
     errors[#errors + 1] = {
         time = GetTime(),
-        kind = self:SafeToString(kind, "lua"),
-        where = self:SafeToString(where, "?"),
-        message = self:SafeToString(err, "<inaccessible error>"),
-        extra = self:SafeToString(extra),
+        kind = BoundedText(kind, "lua", LIMITS.kind),
+        where = BoundedText(where, "?", LIMITS.where),
+        message = BoundedText(err, "<inaccessible error>", LIMITS.message),
+        extra = BoundedText(extra, nil, LIMITS.extra),
     }
     if #errors > MAX_ERRORS then table.remove(errors, 1) end
 end
@@ -33,11 +41,13 @@ addon.LibEvent:SetErrorSink(function(kind, event, err, fn)
     addon:DoctorLog(kind, where, err)
 end)
 
-local frame = CreateFrame("Frame")
-frame:RegisterEvent("ADDON_ACTION_BLOCKED")
-frame:RegisterEvent("ADDON_ACTION_FORBIDDEN")
-frame:SetScript("OnEvent", function(_, event, source, operation)
-    if addon:CanAccessValue(source) and source == addonName then
-        addon:DoctorLog("taint", event, operation)
-    end
-end)
+local function AttachTaintEvent(event)
+    addon.LibEvent:attachEvent(event, function(_, source, operation)
+        if addon:CanAccessValue(source) and source == addonName then
+            addon:DoctorLog("taint", event, operation)
+        end
+    end)
+end
+
+AttachTaintEvent("ADDON_ACTION_BLOCKED")
+AttachTaintEvent("ADDON_ACTION_FORBIDDEN")

@@ -254,6 +254,28 @@ Check("new callbacks wait until the next dispatch", function()
     bus:trigger("test"); assert(calls == 0)
     bus:trigger("test"); assert(calls == 1)
 end)
+Check("nested dispatch does not activate a new cross-event subscriber", function()
+    local _, _, bus = Setup()
+    local calls = 0
+    bus:attachTrigger("outer", function()
+        bus:attachTrigger("inner", function() calls = calls + 1 end)
+        bus:trigger("inner")
+    end)
+    bus:trigger("outer"); assert(calls == 0)
+    bus:trigger("inner"); assert(calls == 1)
+end)
+Check("pending subscriber removed before outer completion stays removed", function()
+    local _, _, bus = Setup()
+    local calls = 0
+    local pending = function() calls = calls + 1 end
+    bus:attachTrigger("outer", function()
+        bus:attachTrigger("inner", pending)
+        bus:detachTrigger("inner", pending)
+        bus:trigger("inner")
+    end)
+    bus:trigger("outer"); bus:trigger("inner")
+    assert(calls == 0 and not bus.triggers.inner)
+end)
 Check("detach and reattach cannot resurrect a captured callback", function()
     local _, _, bus = Setup()
     local calls, first = 0, true
@@ -288,7 +310,8 @@ Check("detach by callback removes all native subscriptions", function()
     local callback = function() end
     bus:attachEvent("A,B,C", callback)
     bus:detachEvent(callback)
-    assert(next(frame.events) == nil and next(bus.events) == nil)
+    assert(not frame.events.A and not frame.events.B and not frame.events.C)
+    assert(not bus.events.A and not bus.events.B and not bus.events.C)
 end)
 Check("error storms are bounded and muted callbacks recover", function()
     local addon, _, bus = Setup()
@@ -302,7 +325,7 @@ end)
 Check("inaccessible error and taint fields are never formatted", function()
     local addon = Setup()
     addon:SafeCall("failure", function() error(secret) end)
-    local watcher = frames[2]
+    local watcher = frames[1]
     watcher.scripts.OnEvent(watcher, "ADDON_ACTION_BLOCKED", secret, secret)
     watcher.scripts.OnEvent(watcher, "ADDON_ACTION_BLOCKED", "RothTooltip", secret)
     assert(addon:DoctorExportText():find("<inaccessible error>", 1, true))
@@ -316,6 +339,24 @@ Check("diagnostics retain at most 80 entries and clear correctly", function()
     assert(text:find("marker-100", 1, true))
     addon:DoctorClear()
     assert(not addon:DoctorExportText():find("marker", 1, true))
+end)
+Check("diagnostic payloads have fixed byte budgets", function()
+    local addon, manager = Setup()
+    local huge = string.rep("x", 5000)
+    addon:DoctorLog(huge, huge, huge, huge)
+    local report = addon:DoctorExportText()
+    assert(#report < 2500)
+    manager:Track("General", function() end, "bounded")
+    local tracked
+    for fn in pairs(manager.meta) do tracked = fn end
+    manager:OnError(tracked, huge)
+    assert(#manager.state.General.lastErr == 1024)
+end)
+Check("doctor shares the private native event owner", function()
+    local _, _, bus, frame = Setup()
+    assert(#frames == 1)
+    assert(frame.events.ADDON_ACTION_BLOCKED and frame.events.ADDON_ACTION_FORBIDDEN)
+    assert(bus.events.ADDON_ACTION_BLOCKED and bus.events.ADDON_ACTION_FORBIDDEN)
 end)
 Check("reentrant enable cannot report a half-initialized module as ready", function()
     local _, manager = Setup()
@@ -377,6 +418,7 @@ end)
 Check("one thousand toggles release callbacks and native registrations", function()
     local _, manager, bus, frame = Setup()
     local calls = 0
+    local baselineRegistrations, baselineRemovals = frame.registrations, frame.removals
     manager:ApplySaved()
     manager:RegisterModule("Cycle", { Enable = function()
         manager:AttachEvent("Cycle", "UPDATE", function() calls = calls + 1 end)
@@ -387,8 +429,9 @@ Check("one thousand toggles release callbacks and native registrations", functio
         assert(manager:Disable("Cycle"))
     end
     collectgarbage("collect")
-    assert(calls == 1000 and frame.registrations == 1000 and frame.removals == 1000)
-    assert(next(bus.events) == nil and #manager._links.Cycle == 0)
+    assert(calls == 1000 and frame.registrations - baselineRegistrations == 1000
+        and frame.removals - baselineRemovals == 1000)
+    assert(not bus.events.UPDATE and #manager._links.Cycle == 0)
     local retained = 0
     for _ in pairs(manager.meta) do retained = retained + 1 end
     assert(retained == 1, "detached callback metadata leaked")
@@ -451,13 +494,24 @@ Check("all changed UI files load without LibStub", function()
     local addon = LoadUI()
     assert(LibStub == nil and addon.Options and SlashCmdList.RothTooltip)
 end)
-Check("UI consumers request only optional media, not a shared bus", function()
+Check("optional media lookup is lazy", function()
     local calls = 0
-    LoadUI({ GetLibrary = function(_, name, silent)
+    local addon = LoadUI({ GetLibrary = function(_, name, silent)
         assert(name == "LibSharedMedia-3.0" and silent == true)
         calls = calls + 1
     end })
-    assert(calls == 2)
+    assert(calls == 0)
+    addon:GetSharedMediaFile("font", "LateFont")
+    assert(calls == 1)
+end)
+Check("optional media can appear after addon load", function()
+    local addon = LoadUI()
+    local library = {
+        IsValid = function(_, kind, value) return kind == "font" and value == "LateFont" end,
+        Fetch = function() return "late-font.ttf" end,
+    }
+    LibStub = { GetLibrary = function() return library end }
+    assert(addon:GetSharedMediaFile("font", "LateFont") == "late-font.ttf")
 end)
 Check("only one hook owns each native backdrop function", function()
     local _, _, _, _, hooks = LoadUI()
@@ -596,9 +650,9 @@ local function MockSettings()
         Default = { True = true, False = false },
         RegisterVerticalLayoutCategory = Category,
         RegisterVerticalLayoutSubcategory = function(_, name) return Category(name) end,
-        RegisterProxySetting = function(_, name, _, _, _, getter, setter)
+        RegisterProxySetting = function(_, name, _, _, default, getter, setter)
             assert(not values[name], "duplicate setting: " .. name)
-            values[name] = { get = getter, set = setter }
+            values[name] = { default = default, get = getter, set = setter }
             return values[name]
         end,
         CreateCheckbox = Initializer, CreateSlider = Initializer,
@@ -720,6 +774,16 @@ Check("unregistered tooltips restore native regions and stop dispatching", funct
     assert(tooltip.NineSlice:IsShown() and not tooltip.Background:IsShown())
     tooltip:Fire("OnShow"); tooltip:Fire("OnHide"); tooltip:Fire("OnTooltipCleared")
     assert(count == 0)
+end)
+Check("temporary style access denial does not create a replacement", function()
+    local addon, bus, tooltip, _, created = StyledUI()
+    local style = addon:GetTooltipStyle(tooltip)
+    local initial = created()
+    style.inaccessible = true
+    bus:trigger("tooltip:init", tooltip)
+    assert(created() == initial and addon:GetTooltipStyle(tooltip) == nil)
+    style.inaccessible = false
+    assert(addon:GetTooltipStyle(tooltip) == style)
 end)
 Check("restricted tooltip layouts do not create visual attachments", function()
     local addon, bus, _, _, created = StyledUI()
