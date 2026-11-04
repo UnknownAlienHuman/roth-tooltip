@@ -40,6 +40,10 @@ OBSOLETE_PATHS = [
     ".github/workflows/apply-single-runtime.yml",
     ".github/workflows/audit-pass3-export.yml",
     ".github/workflows/export-pass3-baseline.yml",
+    ".github/workflows/audit-pass4-export.yml",
+    ".github/workflows/audit4-export.yml",
+    ".github/workflows/export-pass4-baseline.yml",
+    ".github/workflows/publish-pass4.yml",
     ".audit-transfer",
     ".refactor_payload",
 ]
@@ -269,9 +273,16 @@ def validate_runtime_invariants() -> None:
     processor_raw, processor = read_lua("Engine/TooltipProcessor.lua")
     registry_raw, _ = read_lua("Engine/TooltipRegistry.lua")
     manager_raw, manager = read_lua("Engine/ModuleManager.lua")
+    profile_raw, profile = read_lua("Engine/Profile.lua")
+    unit_info_raw, _ = read_lua("Engine/UnitInfo.lua")
     unit_stats_raw, _ = read_lua("Engine/UnitStats.lua")
+    options_raw, _ = read_lua("Options.lua")
     options_core_raw, _ = read_lua("Options/Core.lua")
     profile_dialog_raw, _ = read_lua("Options/Profile.lua")
+    diy_raw, _ = read_lua("Options/DIY.lua")
+    spell_raw, spell = read_lua("Spell.lua")
+    skin_frames_raw, _ = read_lua("SkinFrames.lua")
+    config_raw = (ROOT / "Config.lua").read_text(encoding="utf-8")
 
     if "canaccessvalue" not in safe_raw or "canaccessallvalues" not in safe_raw:
         fail("Safe.lua is missing Retail capability gates")
@@ -307,12 +318,53 @@ def validate_runtime_invariants() -> None:
         fail("module activation order is not deterministic")
     if "bus.depth" not in manager_raw or "entry.pending" not in manager_raw:
         fail("reentrant event-bus subscriptions are not transaction-isolated")
+    if "not entry.pending" not in manager:
+        fail("pending event-bus subscriptions leak through subscriber queries")
     if "pendingInspectTimer" not in unit_stats_raw or "C_Timer.NewTimer" not in unit_stats_raw:
         fail("inspect timeout is not owned and cancellable")
     if "IsValidElementFormat" not in options_core_raw:
         fail("live wildcard writes bypass the profile validator")
     if "CanAccessTable(result)" not in profile_dialog_raw:
         fail("decoded profile documents are not access-gated")
+    portable_gate = profile_raw.find('kind ~= "table" or not addon:CanAccessTable(value)')
+    portable_meta = profile_raw.find("getmetatable(value)")
+    if portable_gate < 0 or portable_meta < 0 or portable_gate > portable_meta:
+        fail("profile validation inspects table metadata before the access gate")
+    if "CopyLayoutRows" not in diy_raw or "NormalizeProfile" not in diy_raw or "__RT_ProfileGeneration" not in diy_raw:
+        fail("DIY layout edits are not detached, validated and generation-gated")
+    if '"modules."' not in options_core_raw:
+        fail("module toggles do not refresh visible exact-source tooltips")
+    for source, label in ((config_raw, "Config.lua"), (options_raw, "Options.lua")):
+        if "npcTitle" in source:
+            fail(f"dead npcTitle setting remains in {label}")
+        if "itemQuality" in source:
+            fail(f"dead unit itemQuality mode remains in {label}")
+    if "addon.colorfunc.itemQuality" in core:
+        fail("dead unit itemQuality color producer remains")
+    if "IconBorder" in spell or "ApplyIconFallback" in spell or 'SafeGet(frame, "Icon")' in spell:
+        fail("Spell.lua mutates Blizzard-owned icon or border regions")
+    if "QuestScrollFrame" in skin_frames_raw or "QuestMapLog_GetStoryTooltip" not in skin_frames_raw:
+        fail("SkinFrames uses a private story-tooltip field instead of the public helper")
+    if "GeneralDockManagerOverflowButtonList" in skin_frames_raw:
+        fail("SkinFrames still targets an absent non-tooltip frame")
+    if "ElementsUseFilter" not in unit_info_raw or '"sameguild"' not in unit_info_raw:
+        fail("same-guild filters do not own their metadata dependency")
+    if "forceHideText" in all_lua_code:
+        fail("obsolete foreign status-bar compatibility field remains")
+    if "StyleByTooltip[tooltip]" not in style_raw or "style ~= nil" not in style_raw:
+        fail("temporary style access denial can create a replacement owner")
+    if "lineCount = math.min(128" not in midnight_raw:
+        fail("tooltip line enumeration is not bounded")
+    if "for index = 1, 64" not in unit_stats_raw or "math.min(256" not in unit_stats_raw:
+        fail("native enrichment collections are not bounded")
+    if 'type(config) ~= "table" or config.enable ~= true' not in core:
+        fail("element enable state is not checked before modifier filter bypass")
+
+    locale_code = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "locales").glob("*.lua"))
+    for stale_key in ("tooltip.itemID", "tooltip.raidProgress", "spell.background", "spell.borderColor"):
+        if stale_key in locale_code:
+            fail(f"dead locale key remains: {stale_key}")
+
     for symbol in ("GetPrimaryTooltipContext", "RefreshTooltipSafe", "RegisterTooltipFrame", "NormalizeProfile"):
         if all_lua_code.count("function addon:" + symbol + "(") != 1:
             fail(f"expected one owner for {symbol}")
@@ -382,7 +434,7 @@ def main() -> int:
     validate_markdown_links()
     validate_runtime_invariants()
     print(
-        "Repository manifest, XML graph, Markdown links, and Retail 12.1 "
+        "Repository manifest, XML graph, Markdown links, and Retail 12.1.5 "
         "runtime invariants are valid."
     )
     return 0

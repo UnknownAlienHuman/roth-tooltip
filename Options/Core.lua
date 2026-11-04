@@ -80,6 +80,7 @@ local function NeedsVisibleRefresh(keystring)
     if keystring == "general.alwaysShowIdInfo" then return true end
     for _, prefix in ipairs({
         "item.",
+        "modules.",
         "quest.",
         "spell.",
         "unit.",

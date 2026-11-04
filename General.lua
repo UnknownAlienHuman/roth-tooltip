@@ -99,8 +99,8 @@ end
 
 local function UpdateStatusText(bar)
     local general = addon.db and addon.db.general
-    if not addon:IsTooltipSafe(GameTooltip) or type(general) ~= "table" or general.statusbarText ~= true
-        or addon:SafeGet(bar, "forceHideText") == true then
+    if not addon:IsTooltipSafe(GameTooltip) or type(general) ~= "table"
+        or general.statusbarText ~= true then
         ClearStatusText(bar)
         return
     end
@@ -222,6 +222,7 @@ local function BuildActiveDB(useCharacter)
 end
 
 local function BroadcastProfile(reason)
+    addon.__RT_ProfileGeneration = (tonumber(addon.__RT_ProfileGeneration) or 0) + 1
     addon.__RT_VariablesLoaded = true
     LibEvent:trigger("tooltip:variables:loaded")
     LibEvent:trigger("ROTHTOOLTIP_GENERAL_INIT")

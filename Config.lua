@@ -138,7 +138,6 @@ addon.db = {
                 classIcon = { enable = false, filter = "none" },
                 questIcon = { enable = true, filter = "none" },
                 name = { enable = true, color = "default", wildcard = "%s", filter = "none" },
-                npcTitle = { enable = true, color = "99e8e8", wildcard = "<%s>", filter = "none" },
                 levelValue = { enable = true, color = "level", wildcard = "%s", filter = "none" },
                 classifBoss = { enable = true, color = "ff0000", wildcard = "(%s)", filter = "none" },
                 classifElite = { enable = true, color = "ffff33", wildcard = "(%s)", filter = "none" },

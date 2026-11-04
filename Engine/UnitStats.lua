@@ -91,7 +91,9 @@ local function SanitizeMythicPlusSummary(summary)
 
     local runs = ReadField(summary, "runs")
     if addon:CanAccessTable(runs) then
-        for _, run in ipairs(runs) do
+        for index = 1, 64 do
+            local run = ReadField(runs, index)
+            if run == nil then break end
             if CanAccess(run) and type(run) == "table" then
                 local level = ReadNumber(run, "bestRunLevel")
                 local score = ReadNumber(run, "bestRunScore") or ReadNumber(run, "mapScore")
@@ -183,12 +185,13 @@ local function GetSavedRaidProgress()
     end
 
     local count = Call(GetNumSavedInstances)
-    if type(count) ~= "number" or count < 1 then
+    if type(count) ~= "number" or count ~= count or count < 1 then
         raidProgressCache = {}
         raidProgressCacheTime = now
         return raidProgressCache
     end
 
+    count = math.min(256, math.floor(count))
     local byName = {}
     for index = 1, count do
         local name, _, _, difficultyID, locked, _, _, isRaid, _, difficultyName,

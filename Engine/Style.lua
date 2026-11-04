@@ -409,7 +409,12 @@ end
 EnsureStyle = function(tooltip)
     if not addon:IsManagedTooltip(tooltip) then return nil end
     InstallTooltipHooks(tooltip)
-    local style = addon:GetTooltipStyle(tooltip) or CreateStyle(tooltip)
+    local style = StyleByTooltip[tooltip]
+    if style ~= nil then
+        if not Accessible(style) then return nil end
+    else
+        style = CreateStyle(tooltip)
+    end
     if not style then return nil end
 
     addon:SafeMethod(style, "Show")

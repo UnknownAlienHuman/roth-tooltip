@@ -10,7 +10,7 @@ local enums = {
     statusbarPosition = { "default", "bottom", "top" },
     statusbarColor = { "default", "auto", "smooth" },
     statusbarTextFormat = { "health/max", "percent", "health (percent)", "none" },
-    colorfunc = { "default", "inherit", "class", "level", "reaction", "itemQuality", "selection", "faction" },
+    colorfunc = { "default", "inherit", "class", "level", "reaction", "selection", "faction" },
 }
 local ranges = {
     scale = { 0.5, 4 }, borderSize = { 1, 8 }, statusbarHeight = { 0, 24 },
@@ -24,6 +24,7 @@ local removedPaths = {
     variables = true,
     ["unit.player.showTargetBy"] = true,
     ["unit.npc.showTargetBy"] = true,
+    ["unit.npc.elements.npcTitle"] = true,
 }
 for _, key in ipairs({
     "legacyAuraFallback", "scrollEnabled", "scrollMaxHeight", "scrollWheelStep",
@@ -53,8 +54,8 @@ local function Portable(value, seen, budget, depth)
     if kind == "number" then return Finite(value) end
     if kind == "string" then return #value <= MAX_STRING end
     if kind == "boolean" then return true end
-    if kind ~= "table" or getmetatable(value) ~= nil or seen[value] then return false end
-    if not addon:CanAccessTable(value) then return false end
+    if kind ~= "table" or not addon:CanAccessTable(value) then return false end
+    if getmetatable(value) ~= nil or seen[value] then return false end
     seen[value] = true
     for key, child in pairs(value) do
         if not addon:CanAccessValue(key) or (type(key) ~= "string" and type(key) ~= "number") then return false end
@@ -73,6 +74,12 @@ function addon:IsValidElementFormat(value)
     return ValidFormat(value)
 end
 local function Scalar(value, default, path, key)
+    -- itemQuality was exposed for unit styling but no unit model ever supplied
+    -- that field. Preserve old profiles by mapping the dead mode to default.
+    if value == "itemQuality" and path:find("unit.", 1, true) == 1
+        and (key == "color" or key == "coloredBorder" or key == "colorfunc") then
+        value = "default"
+    end
     if type(value) == "string" and key:find("FontFlag$", 1) then
         if value == "NORMAL" or value == "NONE" then value = "" end
         return OneOf(value, { "", "default", "OUTLINE", "THINOUTLINE", "THICKOUTLINE", "MONOCHROME", "MONOCHROME,OUTLINE" }) and value or nil
@@ -112,42 +119,84 @@ local Normalize
 local function Layout(source, defaults, strict, path)
     local result = {}
     for key, default in pairs(defaults) do
-        if type(key) == "string" then result[key] = Normalize(source[key], default, strict, path .. "." .. key) end
+        if type(key) == "string" then
+            result[key] = Normalize(addon:SafeGet(source, key), default, strict, path .. "." .. key)
+        end
     end
-    local rows, seen, supplied = {}, {}, false
+
+    local rows, supplied = {}, false
     for key in pairs(source) do
-        local index = tonumber(key)
-        if index then
-            if index < 1 or index > 16 or index ~= math.floor(index) or rows[index] then error("invalid layout row", 0) end
-            rows[index], supplied = source[key], true
-        elseif defaults[key] == nil and strict then error("unknown layout element", 0) end
+        if not addon:CanAccessValue(key) then
+            if strict then error("inaccessible layout key", 0) end
+        else
+            local index
+            if type(key) == "number" then
+                index = key
+            elseif type(key) == "string" and key:match("^[1-9]%d*$") then
+                index = tonumber(key)
+            end
+            local childPath = path .. "." .. tostring(key)
+            if index then
+                if index < 1 or index > 16 or index ~= math.floor(index) or rows[index] ~= nil then
+                    error("invalid layout row", 0)
+                end
+                rows[index], supplied = addon:SafeGet(source, key), true
+            elseif defaults[key] == nil and not removedPaths[childPath] and strict then
+                error("unknown layout element", 0)
+            end
+        end
     end
     if not supplied then
         for index, row in ipairs(defaults) do result[index] = Clone(row) end
         return result
     end
-    local count = 0
+
+    local seen, total = {}, 0
     for index = 1, 16 do
         local row = rows[index]
-        if row then
-            if type(row) ~= "table" or getmetatable(row) then error("invalid layout row", 0) end
-            local clean = {}
-            for column, element in ipairs(row) do
-                if column > 64 or type(element) ~= "string" or type(defaults[element]) ~= "table"
-                    or element == "factionBig" or element == "npcTitle" or seen[element] then error("invalid layout element", 0) end
-                clean[#clean + 1], seen[element], count = element, true, count + 1
+        if row ~= nil then
+            if not addon:CanAccessValue(row) or type(row) ~= "table"
+                or not addon:CanAccessTable(row) or getmetatable(row) ~= nil then
+                error("invalid layout row", 0)
             end
-            for key in pairs(row) do
-                if type(key) ~= "number" or key < 1 or key > #clean or key ~= math.floor(key) then error("invalid layout columns", 0) end
+
+            local columns, columnCount, maximumColumn = {}, 0, 0
+            for column in pairs(row) do
+                if not addon:CanAccessValue(column) or type(column) ~= "number"
+                    or column < 1 or column > 64 or column ~= math.floor(column) then
+                    error("invalid layout columns", 0)
+                end
+                columnCount = columnCount + 1
+                maximumColumn = math.max(maximumColumn, column)
+                columns[column] = addon:SafeGet(row, column)
+            end
+            if columnCount ~= maximumColumn then error("sparse layout row", 0) end
+
+            local clean = {}
+            for column = 1, maximumColumn do
+                local element = columns[column]
+                if not addon:CanAccessValue(element) then error("inaccessible layout element", 0) end
+                if element == "npcTitle" and path == "unit.npc.elements" then
+                    -- Removed presentation-only setting; native NPC titles stay native.
+                elseif type(element) ~= "string" or type(defaults[element]) ~= "table"
+                    or element == "factionBig" or seen[element] then
+                    error("invalid layout element", 0)
+                else
+                    clean[#clean + 1], seen[element], total = element, true, total + 1
+                end
             end
             if #clean > 0 then result[#result + 1] = clean end
         end
     end
-    if count > 64 then error("layout too large", 0) end
+    if total > 64 then error("layout too large", 0) end
     return result
 end
 
 Normalize = function(value, default, strict, path)
+    if not addon:CanAccessValue(value) then
+        if strict then error("inaccessible setting: " .. path, 0) end
+        return Clone(default)
+    end
     if value == nil then return Clone(default) end
     local key = path:match("([^.]+)$") or ""
     if type(default) ~= "table" then
@@ -156,7 +205,7 @@ Normalize = function(value, default, strict, path)
         if strict then error("invalid setting: " .. path, 0) end
         return Clone(default)
     end
-    if type(value) ~= "table" or getmetatable(value) ~= nil or not addon:CanAccessTable(value) then
+    if type(value) ~= "table" or not addon:CanAccessTable(value) or getmetatable(value) ~= nil then
         if strict then error("invalid section: " .. path, 0) end
         return Clone(default)
     end
@@ -169,14 +218,18 @@ Normalize = function(value, default, strict, path)
     local result = {}
     for childKey, childDefault in pairs(default) do
         if childKey ~= "version" and childKey ~= "variables" then
-            result[childKey] = Normalize(value[childKey], childDefault, strict,
+            result[childKey] = Normalize(addon:SafeGet(value, childKey), childDefault, strict,
                 path == "" and tostring(childKey) or path .. "." .. childKey)
         end
     end
     for childKey in pairs(value) do
-        local childPath = path == "" and tostring(childKey) or path .. "." .. tostring(childKey)
-        if default[childKey] == nil and not removedPaths[childPath] and strict then
-            error("unknown setting: " .. childPath, 0)
+        if addon:CanAccessValue(childKey) then
+            local childPath = path == "" and tostring(childKey) or path .. "." .. tostring(childKey)
+            if default[childKey] == nil and not removedPaths[childPath] and strict then
+                error("unknown setting: " .. childPath, 0)
+            end
+        elseif strict then
+            error("inaccessible setting key: " .. path, 0)
         end
     end
     return result

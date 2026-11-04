@@ -40,10 +40,6 @@ local function QuerySecretPredicate(fn, ...)
     return result ~= false
 end
 
-function addon:HasSecretRestrictions()
-    return QuerySecretPredicate(C_Secrets and C_Secrets.HasSecretRestrictions)
-end
-
 function addon:AreAurasRestricted()
     return QuerySecretPredicate(C_Secrets and C_Secrets.ShouldAurasBeSecret)
 end
@@ -155,11 +151,6 @@ function addon:GetPrimaryTooltipContext(tooltip, suppliedData)
         end
     end
     return context
-end
-
-function addon:SafeGetSpellID(tooltip)
-    local context = self:GetPrimaryTooltipContext(tooltip)
-    return context and context.spellID
 end
 
 function addon:GetTooltipUnit(tooltip)
@@ -285,7 +276,9 @@ function addon:FindLine(tooltip, keyword)
     if not self:IsTooltipSafe(tooltip) or not CanAccess(keyword) or type(keyword) ~= "string" then return nil end
     local name = self:SafeMethod(tooltip, "GetName")
     local lineCount = self:SafeMethod(tooltip, "NumLines")
-    if type(name) ~= "string" or type(lineCount) ~= "number" then return nil end
+    if type(name) ~= "string" or type(lineCount) ~= "number"
+        or lineCount ~= lineCount or lineCount < 0 then return nil end
+    lineCount = math.min(128, math.floor(lineCount))
 
     for index = 2, lineCount do
         local line = _G[name .. "TextLeft" .. index]
@@ -309,7 +302,9 @@ function addon:GetLine(tooltip, number)
     if not self:IsTooltipSafe(tooltip) or type(number) ~= "number" or number ~= number or number < 1 or number > 128 or number ~= math.floor(number) then return nil end
     local name = self:SafeMethod(tooltip, "GetName")
     local lineCount = self:SafeMethod(tooltip, "NumLines")
-    if type(name) ~= "string" or type(lineCount) ~= "number" then return nil end
+    if type(name) ~= "string" or type(lineCount) ~= "number"
+        or lineCount ~= lineCount or lineCount < 0 then return nil end
+    lineCount = math.floor(lineCount)
 
     local added = 0
     while lineCount < number and added < 64 do

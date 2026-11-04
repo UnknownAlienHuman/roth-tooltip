@@ -126,8 +126,9 @@ function addon:GetGender(gender)
 end
 
 function addon:CheckFilter(config, raw)
-    if IsAltKeyDown() or IsControlKeyDown() then return true end
     if type(config) ~= "table" or config.enable ~= true then return false end
+    -- Modifiers bypass an enabled element's filter, never its enable state.
+    if IsAltKeyDown() or IsControlKeyDown() then return true end
 
     local filter = config.filter
     if filter == nil or filter == "" or filter == "none" then return true end
@@ -239,13 +240,6 @@ end
 addon.colorfunc.reaction = function(raw)
     local reaction = type(raw) == "table" and raw.reaction or nil
     local color = FACTION_BAR_COLORS and FACTION_BAR_COLORS[reaction or 4]
-    if type(color) ~= "table" then return WhiteColor() end
-    return color.r, color.g, color.b, addon:GetHexColor(color)
-end
-
-addon.colorfunc.itemQuality = function(raw)
-    local quality = type(raw) == "table" and raw.itemQuality or nil
-    local color = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality or 0]
     if type(color) ~= "table" then return WhiteColor() end
     return color.r, color.g, color.b, addon:GetHexColor(color)
 end

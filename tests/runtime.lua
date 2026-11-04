@@ -15,9 +15,10 @@ end
 local function Pack(...) return { n = select("#", ...), ... } end
 local function Load(path, addon) assert(loadfile(path))("RothTooltip", addon) end
 
-local clock, frames
+local clock, frames, deniedTables
 local function Setup(foreign)
     clock, frames = 0, {}
+    deniedTables = setmetatable({}, { __mode = "k" })
     LibStub = foreign
     canaccessvalue = Accessible
     canaccessallvalues = function(...)
@@ -26,7 +27,9 @@ local function Setup(foreign)
         end
         return true
     end
-    canaccesstable = Accessible
+    canaccesstable = function(value)
+        return Accessible(value) and deniedTables[value] ~= true
+    end
     issecretvalue = function(value) return not Accessible(value) end
     GetTime = function() return clock end
     CreateFrame = function()
@@ -255,13 +258,15 @@ Check("new callbacks wait until the next dispatch", function()
     bus:trigger("test"); assert(calls == 1)
 end)
 Check("nested dispatch does not activate a new cross-event subscriber", function()
-    local _, _, bus = Setup()
+    local _, manager, bus = Setup()
     local calls = 0
     bus:attachTrigger("outer", function()
         bus:attachTrigger("inner", function() calls = calls + 1 end)
+        assert(not manager:HasTriggerSubscribers("inner"))
         bus:trigger("inner")
     end)
     bus:trigger("outer"); assert(calls == 0)
+    assert(manager:HasTriggerSubscribers("inner"))
     bus:trigger("inner"); assert(calls == 1)
 end)
 Check("pending subscriber removed before outer completion stays removed", function()
@@ -527,6 +532,14 @@ Check("negated filters correctly reject a true result", function()
     addon.filterfunc.example = function() return false end
     assert(addon:CheckFilter({ enable = true, filter = "not example" }, {}))
 end)
+Check("modifiers bypass filters but never enable disabled elements", function()
+    local addon = LoadUI()
+    IsAltKeyDown = function() return true end
+    addon.filterfunc.example = function() return false end
+    assert(addon:CheckFilter({ enable = true, filter = "example" }, {}))
+    assert(not addon:CheckFilter({ enable = false, filter = "none" }, {}))
+    assert(not addon:CheckFilter(nil, {}))
+end)
 Check("unknown object security does not permit method calls", function()
     local addon = LoadUI()
     local calls = 0
@@ -657,10 +670,17 @@ local function MockSettings()
         end,
         CreateCheckbox = Initializer, CreateSlider = Initializer,
         CreateColorSwatch = Initializer,
-        CreateDropdown = function(_, _, options) options(); return Initializer() end,
+        CreateDropdown = function(_, setting, options)
+            setting.options = options()
+            return Initializer()
+        end,
         CreateSliderOptions = function() return {} end,
         CreateControlTextContainer = function()
-            return { Add = function() end, GetData = function() return {} end }
+            local data = {}
+            return {
+                Add = function(_, value, text) data[#data + 1] = { value = value, text = text } end,
+                GetData = function() return data end,
+            }
         end,
         RegisterAddOnCategory = function() end,
     }
@@ -676,6 +696,28 @@ Check("Settings initializes every category without external libraries", function
     assert(values.ROTH_TOOLTIP_GENERAL_SCALE and values.ROTH_TOOLTIP_MODULES_UNIT)
     assert(addon.Options:TryInitialize() and #categories == 10)
     assert(LibStub == nil)
+end)
+Check("Settings exposes complete supported domains and no dead unit modes", function()
+    local addon = LoadUI()
+    local _, values = MockSettings()
+    addon.__RT_VariablesLoaded = true
+    function addon:IsUsingCharacterProfile() return false end
+    assert(addon.Options:TryInitialize())
+
+    local function HasOption(settingName, expected)
+        local setting = assert(values[settingName], settingName)
+        for _, option in ipairs(setting.options or {}) do
+            if option.value == expected then return true end
+        end
+        return false
+    end
+
+    assert(HasOption("ROTH_TOOLTIP_UNIT_PLAYER_ANCHOR_POSITION", "auto"))
+    assert(HasOption("ROTH_TOOLTIP_UNIT_PLAYER_ANCHOR_P", "CENTER"))
+    assert(HasOption("ROTH_TOOLTIP_UNIT_PLAYER_ELEMENTS_NAME_FILTER", "sameguild"))
+    assert(HasOption("ROTH_TOOLTIP_UNIT_PLAYER_ELEMENTS_NAME_FILTER", "not sameguild"))
+    assert(not HasOption("ROTH_TOOLTIP_UNIT_PLAYER_ELEMENTS_NAME_COLOR_MODE", "itemQuality"))
+    assert(values.ROTH_TOOLTIP_UNIT_NPC_ELEMENTS_NPCTITLE == nil)
 end)
 Check("changing shared fonts dispatches once, not once per tooltip", function()
     local addon, _, bus = LoadUI()
@@ -716,6 +758,31 @@ local function Visual(parent)
     end
     return frame
 end
+Check("spell icon presentation does not mutate native icon or border ownership", function()
+    local addon, _, bus = LoadUI()
+    addon.db.spell = { showIcon = true }
+    addon.db.modules.Spell = true
+    addon.GetPrimaryTooltipContext = function() return { spellID = 42 } end
+    addon.ApplyGeneralStyleToTooltip = function() end
+
+    local tooltip, line, border = Visual(), Visual(), Visual()
+    line.text = "Spell"
+    function line:GetText() return self.text end
+    function line:SetFormattedText(pattern, ...) self.text = string.format(pattern, ...) end
+    tooltip.IconBorder = border
+    tooltip.Icon = Visual(tooltip)
+    addon.GetLine = function() return line end
+
+    local previousSpell = C_Spell
+    C_Spell = { GetSpellTexture = function() return 123 end }
+    Load("Spell.lua", addon)
+    bus:trigger("tooltip:variables:loaded")
+    bus:trigger("tooltip:spell", tooltip, { spellID = 42 })
+    C_Spell = previousSpell
+
+    assert(line.text:find("^|T123", 1) ~= nil)
+    assert(border:IsShown() and tooltip.Icon:IsShown())
+end)
 local function StyledUI()
     local addon, manager, bus, _, hooks = LoadUI()
     UIParent, GameTooltip = Visual(), Visual()
@@ -796,4 +863,6 @@ end)
 
 print(string.format("PASS: %d tests (%s); WoW client not run", passed, _VERSION))
 return { Check = Check, Setup = Setup, Globals = Globals, Visual = Visual, MockSettings = MockSettings,
-    Load = Load, secret = secret, SetClock = function(value) clock = value end, Count = function() return passed end }
+    Load = Load, secret = secret,
+    DenyTable = function(value, denied) deniedTables[value] = denied and true or nil end,
+    SetClock = function(value) clock = value end, Count = function() return passed end }

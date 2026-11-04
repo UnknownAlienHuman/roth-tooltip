@@ -20,6 +20,18 @@
 - Route taint diagnostics through the private native event owner and cap diagnostic fields before retention/export.
 - Add 21 focused regressions; the complete Lua 5.1 suite now contains 121 tests.
 
+## Fourth-pass hardening — 2026-11-04
+
+- Remove dead `npcTitle` and unit `itemQuality` presentation modes while migrating existing profiles to supported state; expose the previously missing same-guild filter and complete anchor domains.
+- Gate profile tables before metatable/key inspection, reject sparse/noncanonical layout identities, and bound native tooltip, Mythic+ and saved-instance enumeration.
+- Keep disabled unit elements disabled under modifier bypass; module toggles now refresh visible exact-source tooltips after the lifecycle commit.
+- Stop mutating native spell icon/border regions; spell presentation is an idempotent owned text prefix. Remove the obsolete foreign `forceHideText` status-bar probe.
+- Preserve one style owner across temporary access denial and keep pending nested subscriptions invisible to subscriber queries until the outer dispatch completes.
+- Make DIY drag/drop a detached clone-validate-generation-check-commit transaction; failed, combat or stale drops leave the live layout untouched.
+- Resolve the story tooltip through the public helper, remove an absent extra-frame target, and retain only frames actually added by `SkinFrames`.
+- Scope-check live source `12.1.5.70783` against the KB-selected `12.1.5.70688`; its changed files do not alter the contracts used by RothTooltip.
+- Add nine focused regressions; the complete suite now contains 130 tests before the final Lua 5.1 CI run.
+
 ## Development audit — 2026-11-03
 
 - Fresh, gated tooltip contexts; exact-source refresh and one modifier owner. Native item readiness and bag/action/comparison acquisition remain native.

@@ -11,19 +11,19 @@ local CUSTOM_COLOR = "__CUSTOM__"
 local VISIBILITY = { "show", "hide" }
 local COMBAT_VISIBILITY = { "show", "hide", "unitOnly" }
 local GENERAL_ANCHORS = { "default", "cursorRight", "cursor", "auto", "static" }
-local UNIT_ANCHORS = { "inherit", "default", "cursorRight", "cursor", "static" }
-local STATIC_POINTS = { "BOTTOMRIGHT", "BOTTOMLEFT", "TOPRIGHT", "TOPLEFT", "TOP", "BOTTOM" }
+local UNIT_ANCHORS = { "inherit", "default", "cursorRight", "cursor", "auto", "static" }
+local STATIC_POINTS = { "BOTTOMRIGHT", "BOTTOMLEFT", "TOPRIGHT", "TOPLEFT", "TOP", "BOTTOM", "CENTER", "LEFT", "RIGHT" }
 local CURSOR_POINTS = { "BOTTOM", "TOP", "LEFT", "RIGHT", "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT" }
 local FILTERS = {
-    "none", "ininstance", "incombat", "inraid", "samerealm", "samecrossrealm",
+    "none", "ininstance", "incombat", "inraid", "samerealm", "samecrossrealm", "sameguild",
     "inpvp", "inarena", "reaction5", "reaction6",
     "not ininstance", "not incombat", "not inraid", "not samerealm",
-    "not samecrossrealm", "not inpvp", "not inarena", "not reaction5", "not reaction6",
+    "not samecrossrealm", "not sameguild", "not inpvp", "not inarena", "not reaction5", "not reaction6",
 }
 local ELEMENT_COLORS = {
-    "default", "class", "level", "reaction", "itemQuality", "selection", "faction", CUSTOM_COLOR,
+    "default", "class", "level", "reaction", "selection", "faction", CUSTOM_COLOR,
 }
-local COLOR_FUNCTIONS = { "default", "class", "level", "reaction", "itemQuality", "selection", "faction" }
+local COLOR_FUNCTIONS = { "default", "class", "level", "reaction", "selection", "faction" }
 local FONT_FLAGS = { "default", "NORMAL", "OUTLINE", "THINOUTLINE" }
 local STATUS_FORMATS = { "health/max", "percent", "health (percent)", "none" }
 
@@ -61,7 +61,6 @@ local NPC_ELEMENTS = {
     { key = "unit.npc.elements.raidIcon", filter = true },
     { key = "unit.npc.elements.classIcon", filter = true },
     { key = "unit.npc.elements.questIcon", filter = true },
-    { key = "unit.npc.elements.npcTitle", color = true, wildcard = true },
     { key = "unit.npc.elements.name", color = true, wildcard = true, filter = true },
     { key = "unit.npc.elements.levelValue", color = true, wildcard = true, filter = true },
     { key = "unit.npc.elements.classifBoss", color = true, wildcard = true, filter = true },
@@ -321,10 +320,10 @@ end
 
 local function AnchorBlock(category, baseKey, label, values, layout)
     AddSection(layout, label)
-    local position = Dropdown(category, baseKey .. ".position", label .. " Position", values)
-    Checkbox(category, baseKey .. ".hiddenInCombat", label .. " Hide in Combat")
-    Checkbox(category, baseKey .. ".returnInCombat", label .. " Return in Combat")
-    Checkbox(category, baseKey .. ".returnOnUnitFrame", label .. " Return on Unit Frame")
+    local position = Dropdown(category, baseKey .. ".position", L[baseKey .. ".position"], values)
+    Checkbox(category, baseKey .. ".hiddenInCombat", L[baseKey .. ".hiddenInCombat"])
+    Checkbox(category, baseKey .. ".returnInCombat", L[baseKey .. ".returnInCombat"])
+    Checkbox(category, baseKey .. ".returnOnUnitFrame", L[baseKey .. ".returnOnUnitFrame"])
 
     local function Bind(initializer, predicate)
         if initializer and position and initializer.SetParentInitializer then
@@ -495,7 +494,16 @@ local function AddGeneralSettings(root, rootLayout)
 
     AddSection(rootLayout, "Profiles and policy")
     Checkbox(root, "general.SavedVariablesPerCharacter", L["general.SavedVariablesPerCharacter"])
-    Dropdown(root, "general.combatPolicy", L["general.combatPolicy"], { "STRICT", "BALANCED", "AGGRESSIVE" })
+    local policyDescriptions = {}
+    for _, mode in ipairs({ "STRICT", "BALANCED", "AGGRESSIVE" }) do
+        local description = rawget(L, "combatPolicy.desc." .. mode)
+        if type(description) == "string" then
+            policyDescriptions[#policyDescriptions + 1] = mode .. ": " .. description
+        end
+    end
+    Dropdown(root, "general.combatPolicy", L["general.combatPolicy"],
+        { "STRICT", "BALANCED", "AGGRESSIVE" },
+        #policyDescriptions > 0 and table.concat(policyDescriptions, "\n") or nil)
 end
 
 local function AddUnitSettings(root)
@@ -574,7 +582,7 @@ end
 local function AddModuleSettings(root)
     local modules, moduleLayout = Settings.RegisterVerticalLayoutSubcategory(root, "Modules")
     Options.categories.modules = modules
-    AddSection(moduleLayout, "Optional modules")
+    AddSection(moduleLayout, "Optional modules", rawget(L, "modules.note"))
     for _, moduleName in ipairs({
         "Anchor", "Target", "Unit", "Model", "Item", "Spell",
         "Quest", "LinkID", "Mount", "ExpansionInfo", "SkinFrames",

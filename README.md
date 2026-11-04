@@ -2,7 +2,7 @@
 
 Roth-style tooltips with configurable unit presentation, item/spell icons, IDs, quest colors, mount sources, health text, cursor anchors and an independent model panel.
 
-**Development target:** Retail 12.1.5.70688, reviewed against the [engineering KB](https://github.com/UnknownAlienHuman/wow-addon-engineering-kb). The TOC declares 12.1.5 / Interface 120105 for the selected patch family. **Named-client validation is still pending; metadata is not runtime certification.**
+**Development target:** Retail 12.1.5 / Interface 120105, reviewed against the [engineering KB](https://github.com/UnknownAlienHuman/wow-addon-engineering-kb). The KB-selected source baseline is `12.1.5.70688`; the later live source `12.1.5.70783` was scoped and does not change the inspected tooltip, Settings, TOC or model contracts used here. **Named-client validation is still pending; metadata and source review are not runtime certification.**
 
 ## Install and configure
 
@@ -20,7 +20,7 @@ The processor consumes current, borrowed native data and emits only ordinary pri
 
 Automatic refresh only repeats an exact supported standard getter/setter pair. Native bag, inventory, action and comparison paths retain their acquisition context and readiness handling. Some settings take effect on the next native display rather than converting those tooltips into generic item/spell tooltips.
 
-Unit formatting edits semantic name/level rows; quest, owner, threat and unknown rows are not overwritten by positional assumptions. Party-zone lookups reuse a short-lived roster snapshot instead of scanning the roster for every hover. NPC titles remain native. Item IDs have one owner (LinkID), and the obsolete private achievement-scroll hook is removed. Background inspection is throttled, owns and cancels its timeout, observes competing requests and never calls `ClearInspectPlayer`; disabling both item level and specialization disables its requests. The model has no layout or hierarchy dependency on native tooltips. Cursor anchoring re-evaluates current scale/quadrant, and DIY layout edits are bounded, combat-safe transactions.
+Unit formatting edits semantic name/level rows; quest, owner, threat and unknown rows are not overwritten by positional assumptions. Party-zone lookups reuse a short-lived roster snapshot instead of scanning the roster for every hover. NPC titles remain native rather than exposing a dead duplicate setting. Item IDs have one owner (LinkID), and spell icons are added through owned text markup without hiding or repurposing native icon regions. Background inspection is throttled, owns and cancels its timeout, observes competing requests and never calls `ClearInspectPlayer`; disabling both item level and specialization disables its requests. The model has no layout or hierarchy dependency on native tooltips. Cursor anchoring re-evaluates current scale/quadrant, and DIY layout edits clone, validate and atomically replace at most sixteen rows. Disabled elements remain disabled even when modifier keys bypass filters.
 
 ## Development
 

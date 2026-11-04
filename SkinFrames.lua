@@ -6,7 +6,6 @@ local EXTRA_FRAME_NAMES = {
     "AtlasLootTooltip",
     "AutoCompleteBox",
     "FriendsTooltip",
-    "GeneralDockManagerOverflowButtonList",
     "QueueStatusFrame",
     "BattlePetTooltip",
     "PetBattlePrimaryAbilityTooltip",
@@ -46,9 +45,9 @@ local function SyncExtraFrames()
 
     for _, name in ipairs(EXTRA_FRAME_NAMES) do RegisterOwned(_G[name]) end
 
-    local questScrollFrame = QuestScrollFrame
-    local storyTooltip = addon:IsObjectAccessible(questScrollFrame)
-        and addon:SafeGet(questScrollFrame, "StoryTooltip") or nil
+    local getStoryTooltip = QuestMapLog_GetStoryTooltip
+    local storyTooltip = type(getStoryTooltip) == "function"
+        and addon:SafeCall("QuestMapLog_GetStoryTooltip", getStoryTooltip) or nil
     RegisterOwned(storyTooltip)
 end
 

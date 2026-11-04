@@ -63,17 +63,19 @@ local function GrayForDead(tooltip, config, unit)
 
     local name = addon:SafeMethod(tooltip, "GetName")
     local lineCount = addon:SafeMethod(tooltip, "NumLines")
-    if type(name) ~= "string" or type(lineCount) ~= "number" then return end
+    if type(name) ~= "string" or type(lineCount) ~= "number"
+        or lineCount ~= lineCount or lineCount < 0 then return end
+    lineCount = math.min(128, math.floor(lineCount))
     for index = 1, lineCount do
         for _, side in ipairs({ "Left", "Right" }) do
-        local line = _G[name .. "Text" .. side .. index]
-        if addon:IsObjectAccessible(line) then
-            local text = addon:SafeMethod(line, "GetText")
-            if type(text) == "string" then
-                addon:SafeMethod(line, "SetText", text:gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa"))
+            local line = _G[name .. "Text" .. side .. index]
+            if addon:IsObjectAccessible(line) then
+                local text = addon:SafeMethod(line, "GetText")
+                if type(text) == "string" then
+                    addon:SafeMethod(line, "SetText", text:gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa"))
+                end
+                addon:SafeMethod(line, "SetTextColor", 0.7, 0.7, 0.7)
             end
-            addon:SafeMethod(line, "SetTextColor", 0.7, 0.7, 0.7)
-        end
         end
     end
 end

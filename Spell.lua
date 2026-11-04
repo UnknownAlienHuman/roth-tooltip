@@ -31,8 +31,7 @@ local function ResolveSpellID(tooltip, context)
     ForEachSpellFrame(tooltip, function(frame)
         if resolved then return end
         local frameContext = addon:GetPrimaryTooltipContext(frame)
-        resolved = type(frameContext) == "table" and ValidSpellID(frameContext.spellID)
-            or ValidSpellID(addon:SafeGetSpellID(frame))
+        resolved = type(frameContext) == "table" and ValidSpellID(frameContext.spellID) or nil
     end)
     return resolved
 end
@@ -52,24 +51,6 @@ local function PrefixHeader(frame, markup)
     return true
 end
 
-local function HideIconBorder(frame)
-    local border = addon:SafeGet(frame, "IconBorder")
-    if not addon:IsObjectAccessible(border) then return end
-    if type(addon:SafeGet(border, "Hide")) == "function" then
-        addon:SafeMethod(border, "Hide")
-    else
-        addon:SafeMethod(border, "SetAlpha", 0)
-    end
-end
-
-local function ApplyIconFallback(frame, texture)
-    local icon = addon:SafeGet(frame, "Icon")
-    if not addon:IsObjectAccessible(icon) then return false end
-    addon:SafeMethod(icon, "SetTexture", texture)
-    addon:SafeMethod(icon, "Show")
-    return true
-end
-
 local function ApplySpellIcon(tooltip, context)
     local config = addon.db and addon.db.spell
     if type(config) ~= "table" or config.showIcon ~= true then return end
@@ -83,12 +64,6 @@ local function ApplySpellIcon(tooltip, context)
     local applied = false
     ForEachSpellFrame(tooltip, function(frame)
         if not applied and PrefixHeader(frame, markup) then applied = true end
-        HideIconBorder(frame)
-    end)
-
-    if applied then return end
-    ForEachSpellFrame(tooltip, function(frame)
-        if not applied and ApplyIconFallback(frame, texture) then applied = true end
     end)
 end
 

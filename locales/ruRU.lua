@@ -27,7 +27,7 @@ addon.L = {
     ["general.anchor.returnInCombat"]       = "Возвращ. в бой",
     ["general.anchor.returnOnUnitFrame"]    = "Возвращ. на рамке юнита",
     ["general.alwaysShowIdInfo"]            = "Постоянное отображение ID (В противном случае, удерживайте нажатой клавишу alt/shift)",
-    ["general.skinMoreFrames"]              = "Больше рамок скинов |cffcccc33(вступает в силу, после перегрузки)|r",
+    ["general.skinMoreFrames"] = "Оформлять дополнительные подсказки",
    
     ["item.coloredItemBorder"]              = "Цвет границы предмета",
     ["item.showItemIcon"]                   = "Отображение значка предмета",
@@ -40,7 +40,6 @@ addon.L = {
     ["unit.player.background"]              = "Фон",
     ["unit.player.coloredBorder"]           = "Цветная граница",
     ["unit.player.showTarget"]              = "Показать цель",
-    ["unit.player.showTargetBy"]            = "Показать На цели",
     ["unit.player.showModel"]               = "Показать модельку персонажа",
     ["unit.player.showItemLevel"]            = "Показывать iLvl",
     ["unit.player.showPveScore"]             = "Показывать Mythic+ рейтинг",
@@ -48,11 +47,9 @@ addon.L = {
     ["unit.player.showRaidProgress"]         = "Показывать прогресс рейда",
     ["unit.player.grayForDead"]             = "Серый цвет для мертвых",
 
-    ["tooltip.itemID"]                       = "ID предмета",
     ["tooltip.itemLevel"]                    = "iLvl",
     ["tooltip.pveScore"]                     = "PvE рейтинг",
     ["tooltip.bestKey"]                     = "Лучший ключ M+",
-    ["tooltip.raidProgress"]                = "Прогресс рейда",
     ["unit.player.elements.roleIcon"]       = "Значок роли",
     ["unit.player.elements.raidIcon"]       = "Значок рейда",
     ["unit.player.elements.pvpIcon"]        = "Значок PVP",
@@ -84,13 +81,11 @@ addon.L = {
     ["unit.npc.background"]                 = "Фон",
     ["unit.npc.coloredBorder"]              = "Цветная граница",
     ["unit.npc.showTarget"]                 = "Показать цель",
-    ["unit.npc.showTargetBy"]               = "Показать На цели",
     ["unit.npc.showModel"]                  = "Показать модельку персонажа",
     ["unit.npc.grayForDead"]                = "Серый цвет для мертвых",
     ["unit.npc.elements.raidIcon"]          = "Значок рейда",
     ["unit.npc.elements.classIcon"]         = "Значок класса",
     ["unit.npc.elements.questIcon"]         = "Значок задания",
-    ["unit.npc.elements.npcTitle"]          = "Звание НИПа",
     ["unit.npc.elements.name"]              = "Имя",
     ["unit.npc.elements.levelValue"]        = "Уровень числом",
     ["unit.npc.elements.classifBoss"]       = "Класс, если босс",
@@ -100,8 +95,6 @@ addon.L = {
     ["unit.npc.elements.reactionName"]      = "Имя реакции",
     ["unit.npc.elements.moveSpeed"]         = "Скорость передвижения",
 	
-    ["spell.background"]                    = "Фон",
-    ["spell.borderColor"]                   = "Цвет границы",
     ["spell.showIcon"]                      = "Значок заклинания",
 	
     ["dropdown.inherit"]        = "|cffffee00Наследовать|r",
@@ -117,7 +110,6 @@ addon.L = {
     ["dropdown.class"]          = "Статический",
     ["dropdown.level"]          = "Линейная окраска",
     ["dropdown.reaction"]       = "Реакция",
-    ["dropdown.itemQuality"]    = "Качество предмета",
     ["dropdown.selection"]      = "Выбор",
     ["dropdown.faction"]        = "Фракция",
     ["dropdown.dark"]           = "Темный",
@@ -136,6 +128,7 @@ addon.L = {
     ["dropdown.ininstance"]     = "В подземелье",
     ["dropdown.samerealm"]      = "Тот же мир",
     ["dropdown.samecrossrealm"]     = "Тот же кросс-мир",
+    ["dropdown.sameguild"] = "та же гильдия",
     ["dropdown.not reaction5"]      = "|cffff3333не|rреакция5",
     ["dropdown.not reaction6"]      = "|cffff3333не|rреакция6",
     ["dropdown.not inraid"]         = "|cffff3333не|rВ рейде",
@@ -145,6 +138,7 @@ addon.L = {
     ["dropdown.not ininstance"]     = "|cffff3333не|rВ подземелье",
     ["dropdown.not samerealm"]      = "|cffff3333не|rТот же мир",
     ["dropdown.not samecrossrealm"]  = "|cffff3333не|rТот же кросс-мир",
+    ["dropdown.not sameguild"] = "|cffff3333не|r та же гильдия",
 	
     ["headerFont"]        = "Заголовок шрифта",
     ["headerFontSize"]    = "Размер шрифта заголовка",
@@ -155,16 +149,15 @@ addon.L = {
 	
     ["Anchor"]   = "Крепление",
     
-    ["TargetBy"] = "На цели",
 
     ["general.combatPolicy"] = "Политика в бою (безопасность)",
     ["combatPolicy.desc.STRICT"] = "В бою: только предметы (и скин/якорь). Самый безопасный режим.",
     ["combatPolicy.desc.BALANCED"] = "В бою: предметы + заклинания. Юниты/ауры блокируются.",
-    ["combatPolicy.desc.AGGRESSIVE"] = "В бою: всё разрешено. Риск taint/SecretValue ошибок.",
+    ["combatPolicy.desc.AGGRESSIVE"] = "В бою: доступный контент, не связанный с юнитами. Нативные ограничения всегда соблюдаются.",
     ["dropdown.STRICT"] = "|cffaaaaaaСТРОГИЙ|r (безопасно)",
     ["dropdown.BALANCED"] = "|cff33ccffСБАЛАНС.|r (+спеллы)",
     ["dropdown.AGGRESSIVE"] = "|cffff3333АГРЕССИВ.|r (риск)",
-    ["modules.note"] = "Отключайте модули ради стабильности/производительности. Некоторые изменения видны после открытия нового тултипа.",
+    ["modules.note"] = "Отключайте ненужные модули, чтобы снизить нагрузку и риск. Некоторые изменения видны после открытия нового тултипа.",
 }
 
 addon.L["unit.player.showSpecialization"] = "Показывать специализацию"

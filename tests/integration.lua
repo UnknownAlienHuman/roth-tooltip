@@ -124,7 +124,7 @@ local function FullSetup(account, character, locale)
     GetClassColor = function() return 1, 0.5, 0 end
     GetCreatureDifficultyColor = function() return { r = 1, g = 1, b = 0 } end
     C_Secrets = { CanCompareUnitTokens = function() return true end }
-    for _, key in ipairs({ "HasSecretRestrictions", "ShouldAurasBeSecret", "ShouldCooldownsBeSecret", "ShouldSpellAuraBeSecret",
+    for _, key in ipairs({ "ShouldAurasBeSecret", "ShouldCooldownsBeSecret", "ShouldSpellAuraBeSecret",
         "ShouldUnitStatsBeSecret", "ShouldUnitIdentityBeSecret", "ShouldUnitHealthBeSecret", "ShouldUnitHealthMaxBeSecret" }) do
         C_Secrets[key] = function() return state.restrictions end
     end
@@ -257,6 +257,19 @@ Check("valid JSON-style layout keys normalize without duplicate element ownershi
     assert(not s.addon:ImportProfile({ unit = { player = { elements = { { "name", "name" } } } } }))
     s:NoErrors()
 end)
+Check("strict layouts reject sparse and noncanonical row identities atomically", function()
+    local s = FullSetup(); local original = s.addon.db
+    local bad = {
+        { unit = { player = { elements = { [1] = { [1] = "name", [3] = "realm" } } } } },
+        { unit = { player = { elements = { ["1e0"] = { "name" } } } } },
+        { unit = { player = { elements = { [1.0] = { "name" }, ["1"] = { "realm" } } } } },
+    }
+    for _, candidate in ipairs(bad) do
+        assert(not s.addon:ImportProfile(candidate))
+        assert(s.addon.db == original)
+    end
+    s:NoErrors()
+end)
 Check("profile changes cannot structurally apply during combat", function()
     local s = FullSetup(); local original = s.addon.db
     InCombatLockdown = function() return true end
@@ -284,7 +297,7 @@ Check("inaccessible identities have no alternate GetUnit/GetSpell fallback", fun
     GameTooltip.GetSpell = GameTooltip.GetUnit
     GameTooltip:SetMockData({ type = 2, guid = secret })
     assert(s.addon:GetPrimaryTooltipContext(GameTooltip) == nil)
-    assert(s.addon:GetTooltipUnit(GameTooltip) == nil and s.addon:SafeGetSpellID(GameTooltip) == nil)
+    assert(s.addon:GetTooltipUnit(GameTooltip) == nil)
     assert(s.addon:GetPrimaryTooltipContext(GameTooltip, secret) == nil); s:NoErrors()
 end)
 Check("unit resolver refuses mismatched current identity", function()
@@ -624,20 +637,39 @@ Check("DIY layout stays within sixteen rows and preview remains single-owner", f
     for index = #elements, 1, -1 do elements[index] = nil end
     elements[1] = { keys[1], keys[2] }
     for index = 2, 16 do elements[index] = { keys[index + 1] } end
+    local original = elements
     s.addon.Options:OpenDIYEditor()
     local preview = s.addon.Options.DIY
     local element = assert(preview.elements.name)
     element:Fire("OnDragStart")
     preview.overLine = { line = 99 }
     element:Fire("OnDragStop")
-    assert(#elements == 16)
-    local found = false
-    for _, row in ipairs(elements) do for _, key in ipairs(row) do if key == "name" then found = true end end end
-    assert(found)
+    elements = s.addon.db.unit.player.elements
+    assert(elements ~= original and #elements == 16)
+    assert(original[1][1] == "name")
+    local found, inLast = false, false
+    for rowIndex, row in ipairs(elements) do
+        for _, key in ipairs(row) do
+            if key == "name" then found, inLast = true, rowIndex == 16 end
+        end
+    end
+    assert(found and inLast)
     local frame, count = preview.frame, #s.frames
     frame.inaccessible = true; s.addon.Options:OpenDIYEditor()
     assert(#s.frames == count and preview.frame == frame)
     frame.inaccessible = false
+    s:NoErrors()
+end)
+Check("DIY invalid drop target leaves the active layout untouched", function()
+    local s = FullSetup(); s.addon.Options:OpenDIYEditor()
+    local preview, rows = s.addon.Options.DIY, s.addon.db.unit.player.elements
+    local before = table.concat(rows[1], ",")
+    local element = assert(preview.elements.name)
+    element:Fire("OnDragStart")
+    preview.overButton = { key = "not-a-current-layout-element" }
+    element:Fire("OnDragStop")
+    assert(s.addon.db.unit.player.elements == rows)
+    assert(table.concat(rows[1], ",") == before and preview.dragging == nil)
     s:NoErrors()
 end)
 Check("DIY drag is atomic across combat entry", function()
@@ -693,6 +725,64 @@ Check("SkinFrames releases only registry entries it actually added", function()
     assert(s.addon:DisableModule("SkinFrames"))
     assert(s.addon:IsManagedTooltip(existing) and not s.addon.tooltipSet[owned])
     AtlasLootTooltip, FriendsTooltip = nil, nil
+    s:NoErrors()
+end)
+Check("profile validation checks table access before metatable inspection", function()
+    local s = FullSetup(); local blocked = {}
+    test.DenyTable(blocked, true)
+    local originalGetMetatable = getmetatable
+    getmetatable = function(value)
+        if value == blocked then error("denied table was inspected") end
+        return originalGetMetatable(value)
+    end
+    local ok, imported = pcall(s.addon.ImportProfile, s.addon, { general = blocked })
+    getmetatable = originalGetMetatable
+    test.DenyTable(blocked, false)
+    assert(ok and not imported)
+    s:NoErrors()
+end)
+Check("removed NPC title and item-quality unit modes migrate without dead state", function()
+    local s = FullSetup()
+    assert(s.addon:ImportProfile({ unit = { npc = {
+        coloredBorder = "itemQuality",
+        background = { colorfunc = "itemQuality" },
+        elements = {
+            npcTitle = { enable = true, color = "itemQuality", wildcard = "<%s>", filter = "none" },
+            name = { color = "itemQuality" },
+            ["1"] = { "npcTitle", "name" },
+        },
+    } } }))
+    local npc = s.addon.db.unit.npc
+    assert(npc.coloredBorder == "default" and npc.background.colorfunc == "default")
+    assert(npc.elements.npcTitle == nil and npc.elements.name.color == "default")
+    assert(#npc.elements == 1 and #npc.elements[1] == 1 and npc.elements[1][1] == "name")
+    assert(s.addon.colorfunc.itemQuality == nil)
+    s:NoErrors()
+end)
+Check("same-guild filters fetch their own metadata dependency", function()
+    local s = FullSetup(); local elements = s.addon.db.unit.player.elements
+    for _, key in ipairs({ "guildName", "guildRank", "guildIndex", "guildRealm" }) do
+        elements[key].enable = false
+    end
+    elements.name.filter = "sameguild"
+    local info = s.addon:GetUnitInfo("target", elements)
+    assert(info and info.guildName == "Guild" and info.guildRealm == "Realm")
+    local rows = s.addon:GetUnitData("target", elements, info)
+    assert(rows[1] and table.concat(rows[1], " "):find("Unit", 1, true))
+    s:NoErrors()
+end)
+Check("module changes rebuild visible exact-source tooltips after lifecycle commit", function()
+    local s = FullSetup(); local calls = 0
+    GameTooltip.SetSpellByID = function(_, spellID)
+        assert(spellID == 123)
+        calls = calls + 1
+        return true
+    end
+    GameTooltip:SetMockData({ type = 1, id = 123 }, "GetSpellByID")
+    assert(s.addon.Options:SetVariable("modules.Spell", false))
+    assert(calls == 1 and not s.addon.MM:IsEnabled("Spell"))
+    assert(s.addon.Options:SetVariable("modules.Spell", true))
+    assert(calls == 2 and s.addon.MM:IsEnabled("Spell"))
     s:NoErrors()
 end)
 print(string.format("PASS: %d tests (%s), including complete TOC Lua bootstrap; native client NOT-RUN", test.Count(), _VERSION))

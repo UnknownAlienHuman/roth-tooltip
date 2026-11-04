@@ -235,7 +235,8 @@ function MM:HasTriggerSubscribers(name)
     local list = bus.triggers[name]
     if not list then return false end
     for _, entry in ipairs(list) do
-        if entry.active and (not entry.owner or self:IsEnabled(entry.owner)) then return true end
+        if entry.active and not entry.pending
+            and (not entry.owner or self:IsEnabled(entry.owner)) then return true end
     end
     return false
 end

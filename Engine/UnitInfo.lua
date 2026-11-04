@@ -11,6 +11,17 @@ local function ElementEnabled(elements, key)
         and elements[key].enable == true
 end
 
+local function ElementsUseFilter(elements, expected)
+    if type(elements) ~= "table" or type(expected) ~= "string" then return false end
+    for key, config in pairs(elements) do
+        if type(key) == "string" and type(config) == "table" and config.enable == true then
+            local filter = config.filter
+            if type(filter) == "string" and filter:gsub("^not%s+", "") == expected then return true end
+        end
+    end
+    return false
+end
+
 function addon:GetQuestBossIcon(unit)
     if self:SafeCallBoolean(UnitIsQuestBoss, unit) then return self.icons.questboss end
 end
@@ -162,6 +173,7 @@ function addon:GetUnitInfo(unit, elements)
         or ElementEnabled(elements, "guildRank")
         or ElementEnabled(elements, "guildIndex")
         or ElementEnabled(elements, "guildRealm")
+        or ElementsUseFilter(elements, "sameguild")
     local needRole = ElementEnabled(elements, "role") or ElementEnabled(elements, "roleIcon")
     local needCreature = ElementEnabled(elements, "creature")
     local needConnection = ElementEnabled(elements, "statusDC")

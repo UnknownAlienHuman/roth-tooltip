@@ -10,6 +10,7 @@ local Preview = {
     elements = {},
     dragging = nil,
     dragRows = nil,
+    dragGeneration = nil,
     overButton = nil,
     overLine = nil,
     accumulator = 0,
@@ -64,6 +65,7 @@ local function ResetDrag(element)
     if element and addon:IsObjectAccessible(element) then addon:SafeMethod(element, "StopMovingOrSizing") end
     Preview.dragging = nil
     Preview.dragRows = nil
+    Preview.dragGeneration = nil
     Preview.overButton = nil
     Preview.overLine = nil
     Preview.accumulator = 0
@@ -83,6 +85,22 @@ local function CompactRows(rows)
     for index = #rows, 1, -1 do
         if type(rows[index]) ~= "table" or #rows[index] == 0 then table.remove(rows, index) end
     end
+end
+
+local function ProfileGeneration()
+    return tonumber(addon.__RT_ProfileGeneration) or 0
+end
+
+local function CopyLayoutRows(rows)
+    if type(rows) ~= "table" then return nil end
+    local copy = {}
+    for rowIndex, row in ipairs(rows) do
+        if type(row) ~= "table" then return nil end
+        local target = {}
+        for column, elementKey in ipairs(row) do target[column] = elementKey end
+        copy[rowIndex] = target
+    end
+    return copy
 end
 
 local function UpdateDragTargets(_, elapsed)
@@ -117,43 +135,72 @@ end
 
 local function FinishDrag(element)
     local rows = Elements()
-    if type(rows) ~= "table" or rows ~= Preview.dragRows or InCombatLockdown() then
+    local generation = ProfileGeneration()
+    if type(rows) ~= "table" or rows ~= Preview.dragRows
+        or generation ~= Preview.dragGeneration or InCombatLockdown() then
         ResetDrag(element)
         if addon:IsObjectAccessible(Preview.frame) then Preview:Render() end
         return
     end
 
-    addon:SafeMethod(element, "StopMovingOrSizing")
-    RemoveElementFromRows(rows, element.key)
+    local candidate = CopyLayoutRows(rows)
+    if not candidate then ResetDrag(element); return end
+    RemoveElementFromRows(candidate, element.key)
 
+    local inserted = false
     if Preview.overButton then
         local targetKey = Preview.overButton.key
-        for _, row in ipairs(rows) do
+        for _, row in ipairs(candidate) do
             for index = 1, #row do
                 if row[index] == targetKey then
                     table.insert(row, index, element.key)
-                    targetKey = nil
+                    inserted = true
                     break
                 end
             end
-            if not targetKey then break end
+            if inserted then break end
         end
     elseif Preview.overLine then
-        local rowIndex = math.max(1, math.min(16, tonumber(Preview.overLine.line) or (#rows + 1)))
-        rows[rowIndex] = rows[rowIndex] or {}
-        table.insert(rows[rowIndex], element.key)
-    elseif #rows < 16 then
-        rows[#rows + 1] = { element.key }
+        local rowIndex = math.max(1, math.min(16, tonumber(Preview.overLine.line) or (#candidate + 1)))
+        candidate[rowIndex] = candidate[rowIndex] or {}
+        table.insert(candidate[rowIndex], element.key)
+        inserted = true
+    elseif #candidate < 16 then
+        candidate[#candidate + 1] = { element.key }
+        inserted = true
     else
-        rows[16] = rows[16] or {}
-        table.insert(rows[16], element.key)
+        candidate[16] = candidate[16] or {}
+        table.insert(candidate[16], element.key)
+        inserted = true
     end
 
-    CompactRows(rows)
+    CompactRows(candidate)
+    if not inserted then
+        ResetDrag(element)
+        Preview:Render()
+        return
+    end
+
+    local normalized, reason = addon:NormalizeProfile({
+        unit = { player = { elements = candidate } },
+    }, true, addon.db)
+    if not normalized then
+        addon:DoctorLog("profile", "diy-layout", reason)
+        ResetDrag(element)
+        Preview:Render()
+        return
+    end
+
+    -- Validate ownership again immediately before publishing the replacement.
+    if Elements() ~= rows or ProfileGeneration() ~= generation or InCombatLockdown() then
+        ResetDrag(element)
+        Preview:Render()
+        return
+    end
+
+    local committed = normalized.unit.player.elements
     ResetDrag(element)
-    LibEvent:trigger("tooltip:variable:changed", "unit.player.elements", rows)
-    Options:RefreshShownTooltips("player-layout")
-    Preview:Render()
+    Options:SetVariable("unit.player.elements", committed)
 end
 
 local function StartDrag(element)
@@ -162,6 +209,7 @@ local function StartDrag(element)
     if type(rows) ~= "table" then return end
     Preview.dragging = element
     Preview.dragRows = rows
+    Preview.dragGeneration = ProfileGeneration()
     Preview.overButton = nil
     Preview.overLine = nil
     Preview.accumulator = 0
