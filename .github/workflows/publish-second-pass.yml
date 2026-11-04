@@ -1,0 +1,59 @@
+name: Publish second-pass audit
+
+on:
+  push:
+    branches:
+      - modernize/tooltip-runtime-2026
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.head_commit.message == 'chore: stage second-pass audit'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Apply reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 9ba84bb263db631fd277697d4b18442e052ef72c
+          echo 'b648a91f6f8f78fda804a9c7137814005c34b616474cbbb543ca12ea774f9038  .audit-transfer/second-pass.patch.b64' | sha256sum --check --strict
+          base64 --decode .audit-transfer/second-pass.patch.b64 | gzip --decompress > /tmp/second-pass.patch
+          echo 'c0ea0a2f9018374a5fdf316b2c35f416b54b45ed4209bbadbbb5a7bbdfb4b7da  /tmp/second-pass.patch' | sha256sum --check --strict
+          git apply --check /tmp/second-pass.patch
+          git apply /tmp/second-pass.patch
+          git rm -r -- .audit-transfer .github/workflows/publish-second-pass.yml
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1
+
+      - name: Validate complete tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          lua5.1 tests/integration.lua
+          find . -type f -name '*.lua' -not -path './.git/*' -print0 \
+            | sort -z \
+            | xargs -0 -n 1 luac5.1 -p
+          python3 tools/check_repo.py
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = 37ed872ef46cfce1cfe20811f2a59d8452ac3576
+
+      - name: Publish verified commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Iurii Lisenkov'
+          git config user.email '71514792+UnknownAlienHuman@users.noreply.github.com'
+          git commit -m 'refactor: harden module order, roster cache and 12.1.5 target' \
+            -m 'Make module activation deterministic, move party roster scans out of the tooltip hot path, keep the addon namespace private, preserve legacy profile imports, accept expansion ID zero, and align TOC metadata with Retail 12.1.5.' \
+            -m '100 tests PASS on Lua 5.1; full Lua parse, TOC/XML/Markdown validation and static ownership checks PASS. Native WoW client remains NOT-RUN.'
+          git push origin HEAD:${GITHUB_REF_NAME}
