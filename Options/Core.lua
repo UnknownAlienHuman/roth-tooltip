@@ -113,9 +113,7 @@ function Options:ApplyRuntimeChange(keystring, value)
         self:TriggerManagedTooltips("tooltip.style.bgfile", value)
     end
 
-    if keystring == "general.statusbarText" then
-        LibEvent:trigger("tooltip.statusbar.text", value)
-    elseif keystring == "general.statusbarHeight" then
+    if keystring == "general.statusbarHeight" then
         LibEvent:trigger("tooltip.statusbar.height", value)
     elseif keystring == "general.statusbarTexture" then
         LibEvent:trigger("tooltip.statusbar.texture", value)
@@ -143,9 +141,9 @@ end
 
 function Options:SetVariable(keystring, value, target)
     if keystring == "general.SavedVariablesPerCharacter" then
-        addon:SelectSavedVariableScope(value == true)
-        LibEvent:trigger("tooltip:variable:changed", keystring, value == true)
-        return true
+        local applied = addon:SelectSavedVariableScope(value == true)
+        LibEvent:trigger("tooltip:variable:changed", keystring, addon:IsUsingCharacterProfile())
+        return applied ~= nil
     end
 
     target = target or addon.db

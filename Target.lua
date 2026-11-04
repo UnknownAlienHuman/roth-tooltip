@@ -83,8 +83,5 @@ function M:Enable()
     addon.MM:AttachTrigger("Target", "tooltip:unit", self.cbUnit, "tooltip:unit")
 end
 
-function M:Disable() end
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("Target", M)

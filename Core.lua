@@ -1,6 +1,6 @@
 -- RothTooltip patch-stable shared core.
 --
--- This file owns formatting, default merging, media lookup, color/filter
+-- This file owns formatting, media lookup, color/filter
 -- functions, and named presentation triggers. Tooltip data, frame registry,
 -- style state, profiles, and module lifecycle are owned elsewhere.
 
@@ -50,71 +50,6 @@ addon.bgs = {
     marble = "Interface\\FrameGeneral\\UI-Background-Marble",
     RothTooltipDarkTexture = "Interface\\AddOns\\RothTooltip\\texture\\RothTooltipDarkTexture",
 }
-
-local function AutoValidateElements(source, destination)
-    local known = {}
-    for rowIndex, row in ipairs(destination) do
-        known[rowIndex] = true
-        if type(row) == "table" then
-            for index = #row, 1, -1 do
-                local key = row[index]
-                if source[key] == nil then table.remove(row, index) else known[key] = true end
-            end
-        end
-    end
-
-    for key, value in pairs(source) do
-        if type(key) ~= "number" and destination[key] == nil then
-            destination[key] = value
-            if key ~= "factionBig" and key ~= "npcTitle" and not known[key]
-                and type(destination[1]) == "table" then
-                table.insert(destination[1], 1, key)
-            end
-        end
-    end
-    return destination
-end
-
-function addon:FixNumericKey(tbl, seen)
-    if type(tbl) ~= "table" then return tbl end
-    seen = seen or {}
-    if seen[tbl] then return tbl end
-    seen[tbl] = true
-
-    local converted = {}
-    for key, value in pairs(tbl) do
-        if type(key) == "string" and string.match(key, "^[1-9]%d*$") then
-            tbl[key] = nil
-            converted[tonumber(key)] = value
-        end
-    end
-    for key, value in pairs(converted) do
-        if tbl[key] == nil then tbl[key] = value end
-    end
-    for key, value in pairs(tbl) do
-        if type(value) == "table" then tbl[key] = self:FixNumericKey(value, seen) end
-    end
-    return tbl
-end
-
-function addon:MergeVariable(source, destination)
-    if type(source) ~= "table" then return destination end
-    if type(destination) ~= "table" then destination = {} end
-
-    destination.version = source.version
-    for key, value in pairs(source) do
-        if destination[key] == nil then
-            destination[key] = value
-        elseif type(value) == "table" and type(destination[key]) == "table" then
-            if key == "elements" then
-                destination[key] = AutoValidateElements(value, destination[key])
-            else
-                self:MergeVariable(value, destination[key])
-            end
-        end
-    end
-    return destination
-end
 
 local function ClampByte(value)
     value = tonumber(value) or 0
@@ -181,12 +116,6 @@ end
 function addon:GetGender(gender)
     if gender == 2 then return MALE, "male" end
     if gender == 3 then return FEMALE, "female" end
-end
-
-function addon:GetNpcTitle(tooltip)
-    local line, index = self:FindLine(tooltip, "^" .. LEVEL)
-    if not line or type(index) ~= "number" or index <= 2 then return nil end
-    return self:GetLine(tooltip, 2)
 end
 
 function addon:CheckFilter(config, raw)
@@ -373,12 +302,6 @@ end
 
 LibEvent:attachTrigger("tooltip.scale", function(_, frame, scale)
     if addon:IsTooltipSafe(frame) and type(scale) == "number" then addon:SafeMethod(frame, "SetScale", scale) end
-end)
-
-LibEvent:attachTrigger("tooltip.anchor.cursor", function(_, frame, parent)
-    if addon:IsTooltipSafe(frame) and addon:IsObjectAccessible(parent) then
-        addon:SafeMethod(frame, "SetOwner", parent, "ANCHOR_CURSOR")
-    end
 end)
 
 LibEvent:attachTrigger("tooltip.anchor.cursor.right", function(_, frame, parent, offsetX, offsetY)

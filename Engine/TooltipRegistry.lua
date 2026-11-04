@@ -5,7 +5,7 @@
 -- runtime lists or dispatch paths.
 
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 
 local BASE_TOOLTIP_NAMES = {
     "GameTooltip",
@@ -26,10 +26,6 @@ local LOAD_ON_DEMAND_TOOLTIP_NAMES = {
 }
 
 addon.tooltipSet = addon.tooltipSet or setmetatable({}, { __mode = "k" })
--- Retained only as a compatibility/debug snapshot. Runtime iteration uses the
--- weak set, and unregistration compacts this list immediately.
-addon.tooltips = addon.tooltips or {}
-
 function addon:IsManagedTooltip(tooltip)
     if not self:IsTooltipSafe(tooltip) or type(self.tooltipSet) ~= "table" then return false end
     if self.tooltipSet[tooltip] then return true end
@@ -40,24 +36,18 @@ end
 function addon:RegisterTooltipFrame(tooltip)
     if not self:IsTooltipSafe(tooltip) then return false end
     self.tooltipSet = self.tooltipSet or setmetatable({}, { __mode = "k" })
-    self.tooltips = self.tooltips or {}
     if self.tooltipSet[tooltip] then return true end
 
     self.tooltipSet[tooltip] = true
-    self.tooltips[#self.tooltips + 1] = tooltip
     LibEvent:trigger("tooltip:init", tooltip)
     return true
 end
 
 function addon:UnregisterTooltipFrame(tooltip)
-    if not self:IsObjectAccessible(tooltip) or type(self.tooltipSet) ~= "table" then return false end
+    if not self:CanAccessValue(tooltip) or tooltip == nil then return false end
     if not self.tooltipSet[tooltip] then return true end
 
     self.tooltipSet[tooltip] = nil
-    self:SetPrimaryTooltipContext(tooltip, nil)
-    for index = #self.tooltips, 1, -1 do
-        if self.tooltips[index] == tooltip then table.remove(self.tooltips, index) end
-    end
     LibEvent:trigger("tooltip:unregister", tooltip)
     return true
 end
@@ -107,22 +97,10 @@ local function RegisterKnownTooltips(notifyExisting)
 end
 
 local function InvalidateVisibleTooltips()
-    addon:ClearTooltipContexts()
-    addon:ForEachVisibleManagedTooltip(function(tooltip)
-        addon:SafeMethod(tooltip, "Hide")
-    end)
-end
-
-local function RefreshLoadedItem(_, itemID, success)
-    if not addon:CanAccessValue(itemID) or type(itemID) ~= "number" then return end
-    if not addon:CanAccessValue(success) or success ~= true then return end
-
-    local itemType = Enum and Enum.TooltipDataType and Enum.TooltipDataType.Item
-    addon:RefreshManagedTooltipsMatching(function(_, context)
-        return type(context) == "table"
-            and context.type == itemType
-            and context.itemID == itemID
-    end, "GET_ITEM_INFO_RECEIVED")
+    -- Release addon-owned presentation without hiding/replaying native data.
+    for tooltip in pairs(addon.tooltipSet) do
+        LibEvent:trigger("tooltip:invalidated", tooltip)
+    end
 end
 
 RegisterKnownTooltips(false)
@@ -147,4 +125,9 @@ LibEvent:attachEvent(
     InvalidateVisibleTooltips
 )
 
-LibEvent:attachEvent("GET_ITEM_INFO_RECEIVED", RefreshLoadedItem)
+-- One modifier owner; Unit and LinkID must not both rebuild the same tooltip.
+LibEvent:attachEvent("MODIFIER_STATE_CHANGED", function()
+    if addon.MM:IsEnabled("Unit") or addon.MM:IsEnabled("LinkID") then
+        addon:RefreshManagedTooltipsMatching()
+    end
+end)

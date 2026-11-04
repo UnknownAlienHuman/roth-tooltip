@@ -7,7 +7,7 @@ local _, addon = ...
 
 local mounts = {}
 local mountScanTicker
-local lastMountByTooltip = setmetatable({}, { __mode = "k" })
+local scanGeneration = 0
 
 local function Call(fn, ...)
     return addon:SafeCall("Mount", fn, ...)
@@ -20,11 +20,11 @@ end
 local function RebuildMountCache()
     if not C_MountJournal or type(C_MountJournal.GetMountIDs) ~= "function" then return false end
     local mountIDs = Call(C_MountJournal.GetMountIDs)
-    if type(mountIDs) ~= "table" then return false end
+    if not addon:CanAccessTable(mountIDs) then return false end
 
     local rebuilt = {}
     for _, mountID in ipairs(mountIDs) do
-        if type(mountID) == "number" then
+        if addon:CanAccessValue(mountID) and type(mountID) == "number" then
             local _, spellID, _, _, _, _, _, _, _, _, isCollected =
                 Call(C_MountJournal.GetMountInfoByID, mountID)
             local _, _, source = Call(C_MountJournal.GetMountInfoExtraByID, mountID)
@@ -42,6 +42,7 @@ local function RebuildMountCache()
 end
 
 local function StopMountScanTicker()
+    scanGeneration = scanGeneration + 1
     if not mountScanTicker then return end
     local ticker = mountScanTicker
     mountScanTicker = nil
@@ -57,8 +58,9 @@ local function ScheduleMountScan()
 
     StopMountScanTicker()
     if not C_Timer or type(C_Timer.NewTicker) ~= "function" then return end
-    local attempts = 0
+    local attempts, generation = 0, scanGeneration
     mountScanTicker = C_Timer.NewTicker(2, function()
+        if generation ~= scanGeneration or not addon.MM:IsEnabled("Mount") then return end
         attempts = attempts + 1
         if RebuildMountCache() or attempts >= 5 then StopMountScanTicker() end
     end)
@@ -70,8 +72,7 @@ local function AddMountSource(tooltip, sourceInfo)
     if type(source) ~= "string" or source == "" then return end
 
     local sourcePattern = "^" .. EscapePattern(source) .. "$"
-    local collectedPattern = "^" .. EscapePattern(source) .. ".+" .. EscapePattern(COLLECTED or "Collected") .. "$"
-    if addon:FindLine(tooltip, sourcePattern) or addon:FindLine(tooltip, collectedPattern) then return end
+    if addon:FindLine(tooltip, sourcePattern) then return end
 
     addon:SafeMethod(tooltip, "AddLine", " ")
     if sourceInfo.isCollected == true then
@@ -88,14 +89,7 @@ local function OnTooltipAura(_, tooltip, _, _, context)
 
     local spellID = context.spellID
     local sourceInfo = mounts[spellID]
-    if sourceInfo and lastMountByTooltip[tooltip] ~= spellID then
-        AddMountSource(tooltip, sourceInfo)
-        lastMountByTooltip[tooltip] = spellID
-    end
-end
-
-local function ClearTooltipState(_, tooltip)
-    if addon:CanAccessValue(tooltip) and tooltip ~= nil then lastMountByTooltip[tooltip] = nil end
+    if sourceInfo then AddMountSource(tooltip, sourceInfo) end
 end
 
 local M = {}
@@ -103,7 +97,6 @@ local M = {}
 function M:Init()
     self.cbScan = ScheduleMountScan
     self.cbAura = OnTooltipAura
-    self.cbClear = ClearTooltipState
 end
 
 function M:Enable()
@@ -117,15 +110,11 @@ function M:Enable()
     -- change journal ownership and no longer trigger full rescans.
     addon.MM:AttachEvent("Mount", "NEW_MOUNT_ADDED", self.cbScan, "NEW_MOUNT_ADDED")
     addon.MM:AttachTrigger("Mount", "tooltip:aura", self.cbAura, "tooltip:aura")
-    addon.MM:AttachTrigger("Mount", "tooltip:cleared, tooltip:hide", self.cbClear, "tooltip:clear")
 end
 
 function M:Disable()
     StopMountScanTicker()
-    wipe(lastMountByTooltip)
 end
 
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("Mount", M)

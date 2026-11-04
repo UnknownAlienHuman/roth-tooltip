@@ -73,7 +73,5 @@ function M:Disable()
     UnregisterOwned()
 end
 
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("SkinFrames", M)

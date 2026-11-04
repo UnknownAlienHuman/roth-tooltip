@@ -1,214 +1,73 @@
--- RothTooltip Retail 12.1 TooltipDataProcessor bridge.
---
--- Raw TooltipData is consumed only by Engine/Midnight.lua. Feature modules
--- receive a sanitized primitive context; raw aura records and argument vectors
--- are never forwarded or retained.
-
+-- Session-long registration; modules only subscribe to the private bus.
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local bus = addon.LibEvent
+local types = Enum.TooltipDataType
 
-local function WantTrigger(eventName)
-    return addon.MM and addon.MM:HasTriggerSubscribers(eventName) == true
-end
-
-local function BuildContext(tooltip, tooltipData)
-    if not addon:CanAccessValue(tooltipData) then
-        addon:SetPrimaryTooltipContext(tooltip, nil)
-        return nil
-    end
-    return addon:GetPrimaryTooltipContext(tooltip, tooltipData)
-end
-
-local function IsUnitContext(context, unitType)
-    if type(context) ~= "table" then return false end
-    if type(unitType) == "number" and context.type == unitType then return true end
-    return type(context.unitToken) == "string" or type(context.guid) == "string"
-end
-
-local function CheckVisibility(tooltip, context, unitType)
-    if not addon:IsTooltipSafe(tooltip) then return false end
+local function Hidden(tooltip, context)
     local visibility = addon.db and addon.db.general and addon.db.general.visibility
-    if type(visibility) ~= "table" then return true end
-
-    if visibility.bags == "hide" and addon:IsBag(tooltip) then return false end
-    if visibility.actionBars == "hide" and addon:IsActionBar(tooltip) then return false end
-
+    if type(visibility) ~= "table" then return false end
+    if visibility.bags == "hide" and addon:IsBag(tooltip) then return true end
+    if visibility.actionBars == "hide" and addon:IsActionBar(tooltip) then return true end
     if InCombatLockdown() then
-        local mode = visibility.inCombat or "show"
-        if mode == "hide" then return false end
-        if mode == "unitOnly" and not IsUnitContext(context, unitType) then return false end
+        if visibility.inCombat == "hide" then return true end
+        if visibility.inCombat == "unitOnly" and context.type ~= types.Unit then return true end
     end
-
-    if visibility.inRaid == "hide" and addon:SafeCallBoolean(IsInRaid) == true then return false end
-    if visibility.inArena == "hide"
-        and addon:SafeCallBoolean(C_PvP and C_PvP.IsArena) == true then
-        return false
-    end
-    return true
+    if visibility.inRaid == "hide" and addon:SafeCallBoolean(IsInRaid) == true then return true end
+    return visibility.inArena == "hide" and addon:SafeCallBoolean(C_PvP and C_PvP.IsArena) == true
 end
 
-local function Prepare(tooltip, tooltipData, unitType)
-    if not addon:IsManagedTooltip(tooltip) then return nil end
+local function Emit(kind, tooltip, ...)
+    local trigger = "tooltip:" .. kind
+    if addon.MM:HasTriggerSubscribers(trigger) and addon:AllowTrigger(kind == "genericid" and "other" or kind, tooltip) then
+        bus:trigger(trigger, tooltip, ...)
+    end
+end
 
-    local context = BuildContext(tooltip, tooltipData)
-    if not CheckVisibility(tooltip, context, unitType) then
+local function PreCall(tooltip, data)
+    if not addon:IsManagedTooltip(tooltip) then return end
+    local context = addon:GetPrimaryTooltipContext(tooltip, data)
+    -- Unknown/inaccessible inputs must never consume the native display.
+    if context and Hidden(tooltip, context) then
         addon:SafeMethod(tooltip, "Hide")
-        return nil
-    end
-    return context
-end
-
-local function ContextHasItem(context)
-    return type(context) == "table"
-        and (type(context.hyperlink) == "string" or type(context.itemID) == "number")
-end
-
-local function ContextHasSpell(context)
-    return type(context) == "table" and type(context.spellID) == "number"
-end
-
-local function CreateItemDispatcher(unitType)
-    return function(tooltip, tooltipData)
-        local context = Prepare(tooltip, tooltipData, unitType)
-        if not ContextHasItem(context) or not addon:AllowTrigger("item", tooltip) then return end
-        if WantTrigger("tooltip:item") then
-            LibEvent:trigger("tooltip:item", tooltip, context.hyperlink, context)
-        end
-    end
-end
-
-local function CreateSpellDispatcher(unitType)
-    return function(tooltip, tooltipData)
-        local context = Prepare(tooltip, tooltipData, unitType)
-        if not ContextHasSpell(context) or not addon:AllowTrigger("spell", tooltip) then return end
-        if WantTrigger("tooltip:spell") then
-            LibEvent:trigger("tooltip:spell", tooltip, context)
-        end
-    end
-end
-
-local function CreateUnitDispatcher(unitType)
-    return function(tooltip, tooltipData)
-        local context = Prepare(tooltip, tooltipData, unitType)
-        if not IsUnitContext(context, unitType) or not addon:AllowTrigger("unit", tooltip) then return end
-        if WantTrigger("tooltip:unit") then
-            LibEvent:trigger(
-                "tooltip:unit",
-                tooltip,
-                context.unitToken,
-                context.guid,
-                unitType,
-                context
-            )
-        end
-    end
-end
-
-local function CreateAuraDispatcher(unitType)
-    return function(tooltip, tooltipData)
-        local context = Prepare(tooltip, tooltipData, unitType)
-        if not ContextHasSpell(context) or not addon:AllowTrigger("aura", tooltip) then return end
-        if WantTrigger("tooltip:aura") then
-            -- Preserve the historic trigger arity while never forwarding raw
-            -- AuraData or TooltipData.args.
-            LibEvent:trigger("tooltip:aura", tooltip, nil, context.spellID, context)
-        end
-    end
-end
-
-local function CreateActionLikeDispatcher(unitType)
-    return function(tooltip, tooltipData)
-        local context = Prepare(tooltip, tooltipData, unitType)
-        if ContextHasItem(context) then
-            if addon:AllowTrigger("item", tooltip) and WantTrigger("tooltip:item") then
-                LibEvent:trigger("tooltip:item", tooltip, context.hyperlink, context)
-            end
-        elseif ContextHasSpell(context) then
-            if addon:AllowTrigger("spell", tooltip) and WantTrigger("tooltip:spell") then
-                LibEvent:trigger("tooltip:spell", tooltip, context)
-            end
-        end
-    end
-end
-
-local function CreateGenericDispatcher(unitType)
-    return function(tooltip, tooltipData)
-        local context = Prepare(tooltip, tooltipData, unitType)
-        if not addon:AllowTrigger("other", tooltip) then return end
-        if type(context) ~= "table" or type(context.id) ~= "number" then return end
-        if not WantTrigger("tooltip:genericid") then return end
-
-        local label = type(addon.TYPE_NAME) == "table" and addon.TYPE_NAME[context.type] or nil
-        if type(label) ~= "string" or label == "" then label = "ID" end
-        LibEvent:trigger("tooltip:genericid", tooltip, label, context.id, context.type, context)
-    end
-end
-
-function addon:InitTooltipDataProcessor()
-    if self.__RT_TooltipProcessorInitialized then
-        return self.__RT_TooltipProcessorReady == true
-    end
-    self.__RT_TooltipProcessorInitialized = true
-    self.__RT_TooltipProcessorReady = false
-
-    local processor = TooltipDataProcessor
-    local addPostCall = processor and processor.AddTooltipPostCall
-    local dataTypes = Enum and Enum.TooltipDataType
-    if type(addPostCall) ~= "function" or type(dataTypes) ~= "table" then
-        if self.DoctorLog then
-            self:DoctorLog("api", "TooltipDataProcessor",
-                "AddTooltipPostCall or Enum.TooltipDataType unavailable", nil)
-        end
-        return false
-    end
-
-    local itemType = dataTypes.Item
-    local spellType = dataTypes.Spell
-    local unitType = dataTypes.Unit
-    local auraType = dataTypes.UnitAura
-    if type(itemType) ~= "number" or type(spellType) ~= "number"
-        or type(unitType) ~= "number" or type(auraType) ~= "number" then
-        if self.DoctorLog then
-            self:DoctorLog("api", "TooltipDataProcessor", "Required Retail tooltip enum missing", nil)
-        end
-        return false
-    end
-
-    local registered = {}
-    local function Register(typeID, callback)
-        if type(typeID) ~= "number" or registered[typeID] then return true end
-        local ok, errorMessage = pcall(addPostCall, typeID, callback)
-        if not ok then
-            if addon.DoctorLog then
-                addon:DoctorLog("api", "TooltipDataProcessor:" .. tostring(typeID),
-                    addon:SafeToString(errorMessage, "registration failed"), nil)
-            end
-            return false
-        end
-        registered[typeID] = true
         return true
     end
+end
 
-    local ready = true
-    ready = Register(itemType, CreateItemDispatcher(unitType)) and ready
-    ready = Register(spellType, CreateSpellDispatcher(unitType)) and ready
-    ready = Register(unitType, CreateUnitDispatcher(unitType)) and ready
-    ready = Register(auraType, CreateAuraDispatcher(unitType)) and ready
-
-    local actionLikeDispatcher = CreateActionLikeDispatcher(unitType)
-    for _, typeID in ipairs({ dataTypes.PetAction, dataTypes.Flyout, dataTypes.Macro }) do
-        if type(typeID) == "number" then Register(typeID, actionLikeDispatcher) end
+local function PostCall(tooltip, data)
+    if not addon:IsManagedTooltip(tooltip) then
+        if addon:CanAccessValue(tooltip) then bus:trigger("tooltip:invalidated", tooltip) end
+        return
     end
-
-    local genericDispatcher = CreateGenericDispatcher(unitType)
-    for typeID in pairs(addon.TYPE_NAME or {}) do
-        if type(typeID) == "number" and not registered[typeID] then
-            Register(typeID, genericDispatcher)
-        end
+    local context = addon:GetPrimaryTooltipContext(tooltip, data)
+    if not context then bus:trigger("tooltip:invalidated", tooltip); return end
+    local kind = context.type
+    if kind == types.Unit then
+        Emit("unit", tooltip, context.unitToken, context.guid, kind, context)
+    elseif kind == types.UnitAura then
+        if context.spellID then Emit("aura", tooltip, nil, context.spellID, context) end
+    elseif context.itemID or context.hyperlink then
+        Emit("item", tooltip, context.hyperlink, context)
+    elseif context.spellID then
+        Emit("spell", tooltip, context)
+    elseif context.id then
+        Emit("genericid", tooltip, addon.TYPE_NAME[kind] or "ID", context.id, kind, context)
     end
+end
 
-    self.__RT_TooltipProcessorReady = ready
-    return ready
+local preRegistered, postRegistered = false, false
+
+function addon:InitTooltipDataProcessor()
+    if self.__RT_TooltipProcessorReady then return true end
+    if not preRegistered then
+        TooltipDataProcessor.AddTooltipPreCall(TooltipDataProcessor.AllTypes, PreCall)
+        preRegistered = true
+    end
+    if not postRegistered then
+        TooltipDataProcessor.AddTooltipPostCall(TooltipDataProcessor.AllTypes, PostCall)
+        postRegistered = true
+    end
+    self.__RT_TooltipProcessorReady = true
+    return true
 end
 
 addon:InitTooltipDataProcessor()

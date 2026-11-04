@@ -6,7 +6,6 @@
 ## SavedVariables: RothTooltipDB
 ## SavedVariablesPerCharacter: RothTooltipCharacterDB
 
-libs\lib.xml
 Engine\Safe.lua
 Engine\Policy.lua
 Engine\ModuleManager.lua
@@ -14,13 +13,16 @@ Engine\Doctor.lua
 Engine\Debug.lua
 Core.lua
 Engine\Midnight.lua
+Engine\UnitInfo.lua
 Engine\Style.lua
 Engine\TooltipRegistry.lua
 Engine\TooltipProcessor.lua
 Config.lua
+Engine\Profile.lua
 General.lua
 Anchor.lua
 Target.lua
+Engine\UnitStats.lua
 Unit.lua
 Model.lua
 Item.lua

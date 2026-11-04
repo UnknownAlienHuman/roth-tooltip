@@ -166,3 +166,7 @@ addon.L = {
     ["dropdown.AGGRESSIVE"] = "|cffff3333АГРЕССИВ.|r (риск)",
     ["modules.note"] = "Отключайте модули ради стабильности/производительности. Некоторые изменения видны после открытия нового тултипа.",
 }
+
+addon.L["unit.player.showSpecialization"] = "Показывать специализацию"
+addon.L["tooltip.spec"] = "Специализация"
+addon.L["tooltip.role"] = "Роль"

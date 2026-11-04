@@ -1,138 +1,81 @@
 local _, addon = ...
-
-local modelFrame
-local rotateElapsed = 0
-
-local function IsOrdinaryUnit(unit)
-    return addon:CanAccessValue(unit)
-        and type(unit) == "string"
-        and unit ~= ""
-        and not addon:IsUnitIdentityRestricted(unit)
-end
+local model
+local elapsedTime = 0
 
 local function ClearModel()
-    if not addon:IsObjectAccessible(modelFrame) then return end
-    addon:SafeMethod(modelFrame, "ClearModel")
-    addon:SafeMethod(modelFrame, "Hide")
-end
-
-local function ModelPathAllowed(unit)
-    return not InCombatLockdown()
-        and not addon:AreUnitStatsRestricted()
-        and IsOrdinaryUnit(unit)
-end
-
-local function EnsureModelFrame(tooltip)
-    if addon:IsObjectAccessible(modelFrame) then return modelFrame end
-    if tooltip ~= GameTooltip or not addon:IsTooltipSafe(tooltip) or InCombatLockdown() then return nil end
-
-    local ok, frame = pcall(CreateFrame, "PlayerModel", nil, UIParent)
-    if not ok or not addon:IsObjectAccessible(frame) then return nil end
-
-    local config = addon.db and addon.db.model or {}
-    addon:SafeMethod(frame, "SetSize", tonumber(config.width) or 100, tonumber(config.height) or 100)
-    addon:SafeMethod(frame, "SetFacing", tonumber(config.facing) or -0.25)
-    addon:SafeMethod(frame, "SetClampedToScreen", true)
-    addon:SafeMethod(frame, "SetFrameStrata", "TOOLTIP")
-    addon:SafeMethod(frame, "Hide")
-
-    if addon:CanBindScripts(frame) then
-        addon:SafeMethod(frame, "SetScript", "OnUpdate", function(self, elapsed)
-            if type(elapsed) ~= "number" then return end
-            rotateElapsed = rotateElapsed + elapsed
-            if rotateElapsed < 0.05 then return end
-
-            local delta = rotateElapsed
-            rotateElapsed = 0
-            if IsControlKeyDown() ~= true and IsAltKeyDown() ~= true then return end
-            local facing = addon:SafeMethod(self, "GetFacing")
-            if type(facing) == "number" then
-                addon:SafeMethod(self, "SetFacing", facing + math.pi * delta)
-            end
-        end)
+    if model then
+        addon:SafeMethod(model, "Hide")
+        addon:SafeMethod(model, "ClearModel")
     end
-
-    modelFrame = frame
-    return frame
+    elapsedTime = 0
 end
 
-local function ResolveModelUnit(tooltip, unit, context)
-    if type(context) ~= "table" then context = addon:GetPrimaryTooltipContext(tooltip) end
-    if type(context) == "table" and IsOrdinaryUnit(context.unitToken) then return context.unitToken end
-
-    local guid = type(context) == "table" and context.guid or nil
-    local token = addon:ResolveUnitToken(unit, guid)
-    if IsOrdinaryUnit(token) then return token end
+local function PositionModel()
+    local config = addon.db.model
+    local x, y = GetCursorPosition()
+    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
+    if not addon:CanAccessAllValues(x, y, scale) or type(x) ~= "number"
+        or type(y) ~= "number" or type(scale) ~= "number" or scale <= 0 then return end
+    addon:SafeMethod(model, "ClearAllPoints")
+    addon:SafeMethod(model, "SetPoint", "BOTTOMLEFT", UIParent, "BOTTOMLEFT",
+        x / scale + config.offsetX, y / scale + 24 + config.offsetY)
 end
 
-local function SetModelUnit(frame, unit)
-    if not addon:IsObjectAccessible(frame) or not ModelPathAllowed(unit) then return false end
-
-    local canSetUnit = addon:SafeGet(frame, "CanSetUnit")
-    if type(canSetUnit) == "function" then
-        -- Generated API docs declare no return for CanSetUnit. Only an error,
-        -- inaccessible result, or explicit false denies the operation.
-        local ok, result = pcall(canSetUnit, frame, unit)
-        if not ok or not addon:CanAccessValue(result) or result == false then return false end
+local function OnUpdate(_, elapsed)
+    elapsedTime = elapsedTime + elapsed
+    if elapsedTime < 0.05 then return end
+    local delta = elapsedTime
+    elapsedTime = 0
+    if InCombatLockdown() or not addon:IsTooltipSafe(GameTooltip)
+        or addon:AreUnitStatsRestricted() then ClearModel(); return end
+    PositionModel()
+    if IsControlKeyDown() or IsAltKeyDown() then
+        local facing = addon:SafeMethod(model, "GetFacing")
+        if type(facing) == "number" then addon:SafeMethod(model, "SetFacing", facing + math.pi * delta) end
     end
-
-    local setUnit = addon:SafeGet(frame, "SetUnit")
-    if type(setUnit) ~= "function" then return false end
-    local ok, success = pcall(setUnit, frame, unit)
-    return ok and addon:CanAccessValue(success) and success == true
 end
 
-local function UpdateModel(tooltip, unit, context)
-    if tooltip ~= GameTooltip or not addon:IsTooltipSafe(tooltip) then return end
-    local token = ResolveModelUnit(tooltip, unit, context)
-    if not ModelPathAllowed(token) then ClearModel() return end
+local function EnsureModel()
+    if model then return model end
+    if InCombatLockdown() then return nil end
+    model = CreateFrame("PlayerModel", nil, UIParent)
+    model:SetClampedToScreen(true)
+    model:SetFrameStrata("TOOLTIP")
+    model:SetScript("OnUpdate", OnUpdate)
+    model:Hide()
+    return model
+end
 
-    local isPlayer = addon:SafeCallBoolean(UnitIsPlayer, token)
-    if isPlayer == nil then ClearModel() return end
-
-    local unitConfig = addon.db and addon.db.unit
-    local config = type(unitConfig) == "table" and (isPlayer and unitConfig.player or unitConfig.npc) or nil
-    if type(config) ~= "table" or config.showModel ~= true then ClearModel() return end
-
-    local frame = EnsureModelFrame(tooltip)
-    if not frame or not SetModelUnit(frame, token) then ClearModel() return end
-
-    local modelConfig = addon.db and addon.db.model or {}
-    addon:SafeMethod(frame, "ClearAllPoints")
-    addon:SafeMethod(frame, "SetPoint", "BOTTOMRIGHT", tooltip, "TOPRIGHT",
-        tonumber(modelConfig.offsetX) or 8, tonumber(modelConfig.offsetY) or -16)
-    addon:SafeMethod(frame, "SetFacing", tonumber(modelConfig.facing) or -0.25)
+local function OnUnit(_, tooltip, _, _, _, context)
+    if not addon:CanAccessValue(tooltip) or tooltip ~= GameTooltip then return end
+    if not addon:AllowTrigger("unit", tooltip) or InCombatLockdown() then ClearModel(); return end
+    local unit = context and addon:ResolveUnitToken(context.unitToken, context.guid)
+    if not unit then ClearModel(); return end
+    local isPlayer = addon:SafeCallBoolean(UnitIsPlayer, unit)
+    local config = isPlayer ~= nil and addon.db.unit[isPlayer and "player" or "npc"]
+    if not config or not config.showModel then ClearModel(); return end
+    local frame = EnsureModel()
+    if not frame then return end
+    -- CanSetUnit has no documented return. SetUnit's explicit result owns success.
+    if addon:SafeMethod(frame, "SetUnit", unit) ~= true then ClearModel(); return end
+    local layout = addon.db.model
+    addon:SafeMethod(frame, "SetSize", layout.width, layout.height)
+    addon:SafeMethod(frame, "SetFacing", layout.facing)
+    PositionModel()
     addon:SafeMethod(frame, "Show")
 end
 
+local function OnClear(_, tooltip)
+    if addon:CanAccessValue(tooltip) and tooltip == GameTooltip then ClearModel() end
+end
+
 local M = {}
-
-function M:Init()
-    self.cbInit = function(_, tooltip)
-        if tooltip == GameTooltip and not InCombatLockdown() then EnsureModelFrame(tooltip) end
-    end
-    self.cbUnit = function(_, tooltip, unit, _, _, context)
-        if not addon:AllowTrigger("unit", tooltip) then ClearModel() return end
-        UpdateModel(tooltip, unit, context)
-    end
-    self.cbClear = function(_, tooltip)
-        if tooltip == GameTooltip then ClearModel() end
-    end
-    self.cbCombat = ClearModel
-end
-
 function M:Enable()
-    addon.MM:AttachTrigger("Model", "tooltip:init", self.cbInit, "tooltip:init")
-    addon.MM:AttachTrigger("Model", "tooltip:unit", self.cbUnit, "tooltip:unit")
-    addon.MM:AttachTrigger("Model", "tooltip:cleared, tooltip:hide", self.cbClear, "tooltip:clear")
-    addon.MM:AttachEvent("Model", "PLAYER_REGEN_DISABLED", self.cbCombat, "PLAYER_REGEN_DISABLED")
+    EnsureModel()
+    addon.MM:AttachTrigger("Model", "tooltip:unit", OnUnit)
+    addon.MM:AttachTrigger("Model", "tooltip:cleared, tooltip:hide, tooltip:unregister, tooltip:invalidated", OnClear)
+    addon.MM:AttachTrigger("Model", "tooltip:variables:loaded", ClearModel)
+    addon.MM:AttachEvent("Model", "PLAYER_REGEN_DISABLED, ADDON_RESTRICTION_STATE_CHANGED, PLAYER_LEAVING_WORLD", ClearModel)
 end
-
-function M:Disable()
-    ClearModel()
-end
-
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
-
+function M:Disable() ClearModel() end
 addon.MM:RegisterModule("Model", M)

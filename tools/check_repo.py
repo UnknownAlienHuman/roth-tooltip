@@ -16,11 +16,15 @@ REQUIRED_LOAD_ORDER = [
     "Engine/Safe.lua",
     "Core.lua",
     "Engine/Midnight.lua",
+    "Engine/UnitInfo.lua",
     "Engine/Style.lua",
     "Engine/TooltipRegistry.lua",
     "Engine/TooltipProcessor.lua",
     "Config.lua",
+    "Engine/Profile.lua",
     "General.lua",
+    "Engine/UnitStats.lua",
+    "Unit.lua",
 ]
 
 OBSOLETE_PATHS = [
@@ -28,6 +32,8 @@ OBSOLETE_PATHS = [
     "Engine/TooltipBootstrap.lua",
     "Engine/Runtime12_1.lua",
     "todo.md",
+    "libs/lib.xml",
+    ".github/workflows/audit-export.yml",
     ".github/workflows/normalize-runtime.yml",
     ".github/workflows/audit-source-export.yml",
     ".github/workflows/audit-donors-export.yml",
@@ -229,6 +235,29 @@ def read_lua(path: str) -> tuple[str, str]:
     return raw, strip_lua_comments(raw)
 
 
+def collect_loaded_files() -> set[str]:
+    """Resolve the actual TOC/XML graph; tests are not addon runtime code."""
+    loaded: set[str] = set()
+
+    def visit(path: Path) -> None:
+        path = path.resolve()
+        if not path.is_relative_to(ROOT) or not path.is_file():
+            fail(f"invalid loaded path: {path}")
+        relative = path.relative_to(ROOT).as_posix()
+        if relative in loaded:
+            fail(f"duplicate load through TOC/XML: {relative}")
+        loaded.add(relative)
+        if path.suffix == ".xml":
+            for element in ET.parse(path).iter():
+                ref = element.attrib.get("file")
+                if ref and element.tag.rsplit("}", 1)[-1] in {"Script", "Include"}:
+                    visit(resolve_xml_reference(path, ref))
+
+    for relative in read_toc()[0]:
+        visit(ROOT / relative)
+    return loaded
+
+
 def validate_runtime_invariants() -> None:
     safe_raw, _ = read_lua("Engine/Safe.lua")
     _, core = read_lua("Core.lua")
@@ -243,17 +272,40 @@ def validate_runtime_invariants() -> None:
         fail("Midnight.lua is missing the Retail 12.1 restriction boundary")
     if "function addon:InitTooltipDataProcessor" not in processor_raw:
         fail("Retail TooltipDataProcessor entrypoint is missing")
-    if "function addon:RegisterTooltipFrame" not in midnight_raw:
+    if "function addon:RegisterTooltipFrame" not in registry_raw:
         fail("managed tooltip registry API is missing")
     if "ADDON_RESTRICTION_STATE_CHANGED" not in registry_raw:
         fail("addon restriction changes no longer invalidate tooltip context")
     if "SPELL_SECRECY_CHANGED" in registry_raw:
         fail("unknown SPELL_SECRECY_CHANGED event was restored")
 
+    loaded = collect_loaded_files()
     all_lua_code = "\n".join(
-        strip_lua_comments(path.read_text(encoding="utf-8"))
-        for path in ROOT.rglob("*.lua")
+        strip_lua_comments((ROOT / path).read_text(encoding="utf-8"))
+        for path in sorted(loaded) if path.endswith(".lua")
     )
+    for path in ROOT.rglob("*.lua"):
+        relative = path.relative_to(ROOT).as_posix()
+        if not relative.startswith("tests/") and relative not in loaded:
+            fail(f"unloaded runtime Lua file: {relative}")
+    if list((ROOT / "tools").glob("_*.py")):
+        fail("obsolete patch-rewriting scripts remain")
+    for symbol in ("GetPrimaryTooltipContext", "RefreshTooltipSafe", "RegisterTooltipFrame", "NormalizeProfile"):
+        if all_lua_code.count("function addon:" + symbol + "(") != 1:
+            fail(f"expected one owner for {symbol}")
+    if all_lua_code.count('"MODIFIER_STATE_CHANGED"') != 1:
+        fail("modifier refresh must have exactly one owner")
+    if "ContextByTooltip" in all_lua_code or "pendingInspectUnit" in all_lua_code:
+        fail("borrowed unit/context identity is retained")
+    if "GET_ITEM_INFO_RECEIVED" in all_lua_code:
+        fail("native tooltip item readiness has a parallel refresh owner")
+    if re.search(r'\bClearInspectPlayer\s*\(', all_lua_code):
+        fail("addon clears the shared inspect channel")
+    if "HybridScrollFrame_CreateButtons" in all_lua_code:
+        fail("private achievement frame scraping was restored")
+    model = strip_lua_comments((ROOT / "Model.lua").read_text(encoding="utf-8"))
+    if re.search(r'"SetPoint"[^\n]*\btooltip\b', model):
+        fail("model layout depends on native tooltip geometry")
     if all_lua_code.count("function addon:InitTooltipDataProcessor") != 1:
         fail("there must be exactly one tooltip processor implementation")
 

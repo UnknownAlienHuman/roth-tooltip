@@ -1,5 +1,5 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 local Options = addon.Options
 
 if not Options then return end

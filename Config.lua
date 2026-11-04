@@ -1,7 +1,7 @@
 local _, addon = ...
 
 addon.db = {
-    version = 3.2,
+    version = 3.3,
     general = {
         scale = 1,
         mask = true,
@@ -62,6 +62,7 @@ addon.db = {
             showModel = true,
             grayForDead = false,
             showItemLevel = true,
+            showSpecialization = true,
             showPveScore = true,
             showBestKey = true,
             showRaidProgress = true,

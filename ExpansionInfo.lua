@@ -46,8 +46,5 @@ function M:Enable()
     addon.MM:AttachTrigger("ExpansionInfo", "tooltip:item", self.cbItem, "tooltip:item")
 end
 
-function M:Disable() end
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("ExpansionInfo", M)

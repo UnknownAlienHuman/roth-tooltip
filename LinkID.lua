@@ -1,8 +1,5 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
 
-local achievementHooks = setmetatable({}, { __mode = "k" })
-local globalHooks = {}
 
 local function EscapePattern(text)
     return type(text) == "string" and (text:gsub("(%W)", "%%%1")) or ""
@@ -26,7 +23,6 @@ local function ShowID(tooltip, label, value, noBlankLine, force)
         addon:SafeMethod(tooltip, "AddLine",
             string.format("%s: |cffffffff%s|r", label, tostring(value)), 0, 1, 0.8)
     end
-    LibEvent:trigger("tooltip.linkid", tooltip, label, value, noBlankLine)
 end
 
 local function GetContext(tooltip, suppliedContext)
@@ -47,81 +43,13 @@ local function ParseGUIDID(guid)
     end
 end
 
-local function RefreshableContext(context)
-    if type(context) ~= "table" then return false end
-    local dataTypes = Enum and Enum.TooltipDataType
-    if type(dataTypes) ~= "table" then return false end
-
-    if context.type == dataTypes.Unit then
-        return type(context.unitToken) == "string" or type(context.guid) == "string"
-    elseif context.type == dataTypes.Item then
-        return type(context.hyperlink) == "string" or type(context.itemID) == "number"
-    elseif context.type == dataTypes.Spell then
-        return type(context.spellID) == "number"
-    end
-    return false
-end
-
-local function ButtonNumber(button, key)
-    local value = addon:SafeGet(button, key)
-    if type(value) == "number" then return value end
-end
-
-local function ShowAchievementID(button)
-    -- hooksecurefunc cannot be removed. The persistent hook is therefore a
-    -- passive adapter and must honor the live module state before doing any
-    -- tooltip work.
-    if not addon.MM:IsEnabled("LinkID") then return end
-
-    local general = addon.db and addon.db.general
-    local always = type(general) == "table" and general.alwaysShowIdInfo == true
-    if not always and not ModifierRequested() then return end
-
-    local achievementID = ButtonNumber(button, "id")
-    if not achievementID or not addon:IsTooltipSafe(GameTooltip) then return end
-    addon:SafeMethod(GameTooltip, "SetOwner", button, "ANCHOR_RIGHT", 0, -32)
-    addon:SafeMethod(GameTooltip, "SetText", "|cffffdd22Achievement:|r " .. achievementID, 0, 1, 0.8)
-    addon:SafeMethod(GameTooltip, "Show")
-end
-
-local function HookAchievementButtons(frame, buttonTemplate)
-    if not addon.MM:IsEnabled("LinkID") or not addon:IsObjectAccessible(frame) then return end
-    if buttonTemplate ~= "StatTemplate" and buttonTemplate ~= "AchievementTemplate" then return end
-
-    local buttons = addon:SafeGet(frame, "buttons")
-    if type(buttons) ~= "table" then return end
-    for _, button in pairs(buttons) do
-        if addon:IsObjectAccessible(button) and not achievementHooks[button]
-            and addon:CanBindScripts(button) then
-            achievementHooks[button] = true
-            addon:SafeMethod(button, "HookScript", "OnEnter", ShowAchievementID)
-            if buttonTemplate == "AchievementTemplate" then
-                addon:SafeMethod(button, "HookScript", "OnLeave", GameTooltip_Hide)
-            end
-        end
-    end
-end
-
-local function TryInstallGlobalHooks()
-    if type(hooksecurefunc) ~= "function" then return end
-
-    if not globalHooks.achievements and type(HybridScrollFrame_CreateButtons) == "function" then
-        hooksecurefunc("HybridScrollFrame_CreateButtons", function(frame, buttonTemplate)
-            local ok, errorMessage = pcall(HookAchievementButtons, frame, buttonTemplate)
-            if not ok and addon.DoctorLog then
-                addon:DoctorLog("lua", "LinkID:HybridScrollFrame_CreateButtons", errorMessage, nil)
-            end
-        end)
-        globalHooks.achievements = true
-    end
-end
-
 local M = {}
 
 function M:Init()
     self.cbItem = function(_, tooltip, _, context)
         context = GetContext(tooltip, context)
-        ShowID(tooltip, "Item", type(context) == "table" and context.itemID or nil)
+        ShowID(tooltip, "Item", type(context) == "table" and context.itemID or nil, nil,
+            addon.db and addon.db.item and addon.db.item.showItemID == true)
     end
 
     self.cbSpell = function(_, tooltip, context)
@@ -145,13 +73,6 @@ function M:Init()
         if label then ShowID(tooltip, label, id) end
     end
 
-    self.cbModifier = function()
-        addon:RefreshManagedTooltipsMatching(function(_, context)
-            return RefreshableContext(context)
-        end, "MODIFIER_STATE_CHANGED")
-    end
-
-    self.cbTryHooks = TryInstallGlobalHooks
 end
 
 function M:Enable()
@@ -160,13 +81,7 @@ function M:Enable()
     addon.MM:AttachTrigger("LinkID", "tooltip:aura", self.cbAura, "tooltip:aura")
     addon.MM:AttachTrigger("LinkID", "tooltip:unit", self.cbUnit, "tooltip:unit")
     addon.MM:AttachTrigger("LinkID", "tooltip:genericid", self.cbGeneric, "tooltip:genericid")
-    addon.MM:AttachEvent("LinkID", "MODIFIER_STATE_CHANGED", self.cbModifier, "MODIFIER_STATE_CHANGED")
-    addon.MM:AttachEvent("LinkID", "ADDON_LOADED, PLAYER_LOGIN", self.cbTryHooks, "install-hooks")
-    TryInstallGlobalHooks()
 end
 
-function M:Disable() end
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("LinkID", M)

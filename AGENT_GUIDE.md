@@ -8,9 +8,9 @@ Use the [engineering KB task index](https://github.com/UnknownAlienHuman/wow-add
 - `Engine/Safe.lua`: value/table/object access and error containment. Gate before comparison, indexing, formatting, storage or logging. A successful `pcall` does not grant access or declassify a value.
 - `Engine/Policy.lua`: user policy after native access checks. No mode overrides forbidden aspects or secret restrictions.
 - `Engine/ModuleManager.lua`: private `addon.LibEvent`, native events, subscriptions, module state and callback attribution. Do not install or modify a global LibStub/LibEvent replacement.
-- `Engine/Midnight.lua`: patch-sensitive tooltip context, unit helpers, line access and refresh. `Engine/TooltipProcessor.lua` is the single session-long native processor registration owner.
+- `Engine/Midnight.lua`: patch-sensitive fresh tooltip context, line access and refresh; it stores no context cache. `Engine/UnitInfo.lua` owns ordinary unit formatting and `Engine/UnitStats.lua` owns bounded enrichment. `Engine/TooltipProcessor.lua` is the single session-long native processor registration owner.
 - `Engine/TooltipRegistry.lua`: managed-frame membership. `Engine/Style.lua`: addon visuals and native backdrop hooks. Do not reintroduce backdrop hooks in Core or reapply base colors after feature processing.
-- `General.lua`: active SavedVariables selection, migrations and status bar. `Config.lua`: defaults. Settings and slash commands must use the same module/profile APIs, not write a second runtime state.
+- `Engine/Profile.lua`: pure schema validation/migration. `General.lua`: active SavedVariables selection and status bar. `Config.lua`: defaults. Settings and slash commands must use the same module/profile APIs, not write a second runtime state.
 
 The old bootstrap/override files are absent from this branch. Do not recreate a shadow implementation suppressed only by load order. Optional LibSharedMedia lookups must tolerate LibStub being absent.
 

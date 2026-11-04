@@ -3,33 +3,35 @@
 Run from the repository root:
 
 ```sh
-lua5.1 tests/runtime.lua
+lua5.1 tests/integration.lua
 find . -type f -name '*.lua' -not -path './.git/*' -print0 | xargs -0 -n 1 luac5.1 -p
 python3 tools/check_repo.py
+git diff --check
 ```
 
-## Recorded focused run: 2026-11-03
+## Recorded local run — 2026-11-03
 
-`texlua tests/runtime.lua`: **59 PASS, Lua 5.3**. `texluac -p` accepted the nine changed runtime files and the test file. Git blob hashes of the published runtime/test files were checked against the locally tested bytes.
+**97 tests PASS on Lua 5.1.5.** `tests/integration.lua` includes the original 59 runtime checks, then executes all Lua files in TOC/XML-include order with explicit API/frame/Settings mocks. It covers cold bootstrap with late SavedVariables, four locales, all twelve modules, profile migration/import/isolation/limits, fresh and denied contexts, source-preserving refresh, semantic rows and right columns, model layout/cleanup, inspect ownership/races, cursor/mount cancellation and full-bootstrap module toggling. The original suite also runs 1,000 enable/disable cycles.
 
-The harness loads complete Safe, ModuleManager, Doctor, Policy, Core, Style, Debug, Options/Core and Options files with explicit mocks. It covers tuple arity beyond sixteen results, nil/false preservation, denied access, subscription mutation and rollback, lifecycle failures/retry, error attribution, 1,000 enable/disable cycles, library-free loading, truthful Settings/slash outcomes, ten Settings categories, one shared-font update, stable visual hooks, feature-color preservation and native-region restoration.
+All runtime and test Lua files pass `luac5.1 -p`. The whole-tree manifest/XML graph, local Markdown links, loaded-file and single-owner checks pass. No unreferenced runtime Lua, obsolete patch-rewriting scripts, empty loader, legacy runtime overlays or temporary source-export workflow remain.
 
-The mocks do not implement WoW secret values, taint propagation, protected execution, native rendering or server behavior. This is not a full addon bootstrap test or a performance benchmark. Lua 5.1 execution, full-tree repository checks and the client matrix below were **NOT-RUN** in this environment. The run used a focused checkout of changed files; unchanged feature modules were not executed by this harness.
+The complete **Lua bootstrap** is tested, not a real WoW startup. Native XML templates, Secret Values, taint propagation, protected execution, server responses, rendering and profiler measurements are not emulated. Those client-dependent claims remain **NOT-RUN**.
 
-## Source and release boundary
+## Source contract
 
-Engineering reference: [KB tooltip owner](https://github.com/UnknownAlienHuman/wow-addon-engineering-kb/blob/main/KB/nodes/BlizzardUI_Tooltip.md), selected source `Gethe/wow-ui-source@d07eb00237d8891f153215db98a5df880a26cfe5`, build `12.1.5.70688` (KB source check 2026-11-02). Relevant native object metadata is [SimpleFrameScriptObjectAPI](https://github.com/Gethe/wow-ui-source/blob/d07eb00237d8891f153215db98a5df880a26cfe5/Interface/AddOns/Blizzard_APIDocumentationGenerated/SimpleFrameScriptObjectAPIDocumentation.lua).
+Selected source: `Gethe/wow-ui-source@d07eb00237d8891f153215db98a5df880a26cfe5`, Retail `12.1.5.70688`; live version rechecked 2026-11-03. Consult the [KB tooltip owner](https://github.com/UnknownAlienHuman/wow-addon-engineering-kb/blob/main/KB/nodes/BlizzardUI_Tooltip.md), [ownership guide](https://github.com/UnknownAlienHuman/wow-addon-engineering-kb/blob/main/KB/addon/Tooltip_Addon_Ownership_Audit_12.1.5.md), [persistence guide](https://github.com/UnknownAlienHuman/wow-addon-engineering-kb/blob/main/KB/addon/Addon_SavedVariables.md) and both current overlays before patch-sensitive changes.
 
-The addon TOC remains `120100` / `12.1.0`; this focused refactor does not certify a completed 12.1.5 migration or a client build. Update release metadata only as part of the remaining migration/release validation.
+Inspected platform slices: `TooltipDataHandler.lua:AddTooltipPreCall/AddTooltipPostCall/InternalProcessInfo`, `TooltipUtil.lua:GetDisplayedItem/GetDisplayedSpell/GetDisplayedUnit`, `TooltipInfoSharedDocumentation.lua:TooltipDataLineType/TooltipDataType`, `SimpleFrameScriptObjectAPIDocumentation.lua` access/forbidden-aspect queries, and `FrameAPICharacterModelBaseDocumentation.lua:CanSetUnit/SetUnit` at the selected source pin.
 
-## Required client checks
+The expected Interface family is 120105, but client `GetBuildInfo()` is NOT-RUN. TOC release metadata stays 120100 / 12.1.0 until the named-client release gate; saved profile schema 3.3 is a separate version.
 
-Record client build/Interface, addon commit, enabled addon set and error/taint logs for:
+## Client release gate
 
-- Cold login and reload, addon-only and with optional media; account/character profiles, import/reset and repeated module toggles.
-- Item, spell, action/macro, unit, aura, quest and comparison tooltips; colors after clear/show, rebuild, profile changes and extra-frame unregister.
-- Combat, restriction changes, managed aura layout, second use after restricted display and Settings reopen; no repeating forbidden/taint/error loops.
-- Modifier and inspect completion refresh, rapid owner/unit changes and inspect-UI coexistence; model layout/cleanup and cursor-follow teardown.
-- Fractional UI scales and actual textures/fonts; measure CPU/allocation behavior before claiming a performance improvement.
+Keep [issue #1](https://github.com/UnknownAlienHuman/roth-tooltip/issues/1) open. Record client build/Interface, addon commit, enabled addon set and error/taint logs for:
 
-Retain [issue #1](https://github.com/UnknownAlienHuman/roth-tooltip/issues/1) until its client matrix is completed. In particular, the historical raw-rebuild incident still requires reload, modifier changes, INSPECT_READY and settings/profile reapply without `UnitPlayerControlled` / `GameTooltip_UnitColor` failures.
+- Cold login/reload with and without media; account/character profiles, bounded JSON import/export round trip, reset and repeated toggles.
+- Item/spell/macro/unit/aura/quest/comparison displays; uncached items, rapid owner changes, semantic name/level/NPC-title behavior, both columns and preserved objectives. Check settings which intentionally wait for the next native display.
+- Combat, restriction transitions, managed aura layout and post-restriction second use; no repeating forbidden/taint/error loops.
+- Modifier and INSPECT_READY refresh, pending timeout, competing inspection, Inspect UI coexistence; no `UnitPlayerControlled` / `GameTooltip_UnitColor` failures from the historical raw-rebuild incident.
+- Independent cursor/model panel at fractional UI scales, cleanup on hidden/replaced frames, native texture/font rendering, Settings/profile dialogs and DIY drag/drop.
+- Real CPU/allocation measurements before claiming measured performance gains; then promote release metadata only for the validated client range.

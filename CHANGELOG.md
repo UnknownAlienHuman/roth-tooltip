@@ -1,5 +1,14 @@
 # Changelog
 
+## Development audit — 2026-11-03
+
+- Fresh, gated tooltip contexts; exact-source refresh and one modifier owner. Native item readiness and bag/action/comparison acquisition remain native.
+- Semantic unit rows preserve unrelated content; private achievement-frame scraping and duplicate item-ID rendering removed.
+- Independent model panel; generation-safe cursor/mount timers; bounded inspect with competing-owner observation, no global inspect clear and no retained unit token.
+- Detached profile schema 3.3 validation, bounded legacy/enveloped JSON import, recovery of malformed saved leaves and preservation of newer schemas.
+- Split unit metadata/enrichment and profile validation from large mixed-responsibility files. Remove empty lifecycle methods, obsolete rewrite scripts, empty XML loader and source-export workflow.
+- Full TOC Lua bootstrap/integration tests now run on Lua 5.1. Native client/taint/render/performance gate remains open; release metadata is unchanged.
+
 ## 12.1.0 — 2026-08-27
 
 ### Retail target

@@ -1,5 +1,5 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 
 local CURSOR_INTERVAL = 0.05
 local states = setmetatable({}, { __mode = "k" })
@@ -23,7 +23,7 @@ end
 local function SetCursorPoint(tooltip, point, offsetX, offsetY, scale)
     if not addon:IsTooltipSafe(tooltip) or type(scale) ~= "number" or scale <= 0 then return false end
     local cursorX, cursorY = GetCursorPosition()
-    if type(cursorX) ~= "number" or type(cursorY) ~= "number" then return false end
+    if not addon:CanAccessAllValues(cursorX, cursorY) or type(cursorX) ~= "number" or type(cursorY) ~= "number" then return false end
 
     local x = floor(cursorX / scale + offsetX)
     local y = floor(cursorY / scale + offsetY)
@@ -44,7 +44,7 @@ local function AnchorToCursor(tooltip, point, offsetX, offsetY)
     StopCursorAnchor(tooltip)
     if not addon:IsTooltipSafe(tooltip) then return end
 
-    local scale = addon:SafeMethod(tooltip, "GetEffectiveScale")
+    local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
     if type(scale) ~= "number" or scale <= 0 then return end
     point = type(point) == "string" and point or "BOTTOM"
     offsetX, offsetY = tonumber(offsetX) or 0, tonumber(offsetY) or 20
@@ -53,13 +53,15 @@ local function AnchorToCursor(tooltip, point, offsetX, offsetY)
 
     local state = states[tooltip] or {}
     state.ticker = C_Timer.NewTicker(CURSOR_INTERVAL, function()
-        if not addon:IsTooltipSafe(tooltip)
+        if states[tooltip] ~= state then return end
+        if not addon.MM:IsEnabled("Anchor") or not addon:IsTooltipSafe(tooltip)
             or addon:SafeMethod(tooltip, "IsShown") ~= true
-            or addon:SafeMethod(tooltip, "GetAnchorType") ~= "ANCHOR_CURSOR" then
+            or addon:SafeMethod(tooltip, "GetAnchorType") ~= "ANCHOR_NONE" then
             StopCursorAnchor(tooltip)
             return
         end
-        SetCursorPoint(tooltip, point, offsetX, offsetY, scale)
+        local currentScale = addon:SafeMethod(UIParent, "GetEffectiveScale")
+        SetCursorPoint(tooltip, point, offsetX, offsetY, currentScale)
     end)
     states[tooltip] = state
 end
@@ -68,7 +70,8 @@ local function CursorQuadrant()
     local cursorX, cursorY = GetCursorPosition()
     local width, height = GetScreenWidth(), GetScreenHeight()
     local scale = addon:SafeMethod(UIParent, "GetEffectiveScale")
-    if type(cursorX) ~= "number" or type(cursorY) ~= "number"
+    if not addon:CanAccessAllValues(cursorX, cursorY, width, height, scale)
+        or type(cursorX) ~= "number" or type(cursorY) ~= "number"
         or type(width) ~= "number" or type(height) ~= "number"
         or type(scale) ~= "number" or scale <= 0 then
         return "BOTTOMLEFT"
@@ -129,12 +132,12 @@ local function ApplyAnchor(tooltip, parent, anchor, isUnitFrame, finalPass)
 
     local position = anchor.position
     if position == "cursorRight" then
-        LibEvent:trigger("tooltip.anchor.cursor.right", tooltip, parent)
+        LibEvent:trigger("tooltip.anchor.cursor.right", tooltip, parent, anchor.cx, anchor.cy)
     elseif position == "cursor" then
-        LibEvent:trigger("tooltip.anchor.cursor", tooltip, parent)
+        addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_NONE")
         AnchorToCursor(tooltip, anchor.cp, anchor.cx, anchor.cy)
     elseif position == "auto" then
-        LibEvent:trigger("tooltip.anchor.cursor", tooltip, parent)
+        addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_NONE")
         AnchorAuto(tooltip, anchor.cx, anchor.cy)
     elseif position == "inherit" and not finalPass then
         local general = addon.db and addon.db.general
@@ -157,7 +160,7 @@ local function ResolveAnchorUnit(tooltip)
 end
 
 local function OnAnchor(_, tooltip, parent)
-    if tooltip ~= GameTooltip or not addon:IsTooltipSafe(tooltip) or type(addon.db) ~= "table" then return end
+    if not addon:CanAccessValue(tooltip) or tooltip ~= GameTooltip or not addon:IsTooltipSafe(tooltip) or type(addon.db) ~= "table" then return end
     if not addon:IsObjectAccessible(parent) then parent = UIParent end
 
     local unit, isUnitFrame = ResolveAnchorUnit(tooltip)
@@ -179,19 +182,25 @@ local M = {}
 
 function M:Init()
     self.cbAnchor = OnAnchor
-    self.cbStop = function(_, tooltip) StopCursorAnchor(tooltip) end
+    self.cbStop = function(_, tooltip)
+        if addon:CanAccessValue(tooltip) and tooltip ~= nil then StopCursorAnchor(tooltip) end
+    end
+    self.cbProfile = function() StopCursorAnchor(GameTooltip) end
+    self.cbVariable = function(_, key)
+        if type(key) == "string" and key:find("anchor", 1, true) then StopCursorAnchor(GameTooltip) end
+    end
 end
 
 function M:Enable()
     addon.MM:AttachTrigger("Anchor", "tooltip:anchor", self.cbAnchor, "tooltip:anchor")
-    addon.MM:AttachTrigger("Anchor", "tooltip:cleared, tooltip:hide", self.cbStop, "tooltip:clear")
+    addon.MM:AttachTrigger("Anchor", "tooltip:variables:loaded", self.cbProfile)
+    addon.MM:AttachTrigger("Anchor", "tooltip:variable:changed", self.cbVariable)
+    addon.MM:AttachTrigger("Anchor", "tooltip:hide, tooltip:unregister, tooltip:invalidated", self.cbStop, "tooltip:clear")
 end
 
 function M:Disable()
     StopCursorAnchor(GameTooltip)
 end
 
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("Anchor", M)

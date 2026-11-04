@@ -1,5 +1,5 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 
 local GetItemInfo = C_Item and C_Item.GetItemInfo
 local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant
@@ -108,17 +108,6 @@ local function ApplyItemIcon(tooltip, itemData)
     )
 end
 
-local function ApplyItemIDLine(tooltip, itemData)
-    local config = addon.db and addon.db.item
-    if type(config) ~= "table" or config.showItemID ~= true then return end
-    if type(itemData.itemID) ~= "number" then return end
-
-    local label = addon.L and addon.L["tooltip.itemID"] or "ItemID"
-    if addon:FindLine(tooltip, "^" .. label .. ":") then return end
-    addon:SafeMethod(tooltip, "AddLine",
-        string.format("%s: |cffffffff%d|r", label, itemData.itemID), 0, 1, 0.8)
-end
-
 local function OnTooltipItem(_, tooltip, link, context)
     if not addon:IsTooltipSafe(tooltip) or not addon:AllowTrigger("item", tooltip) then return end
     local itemData = ResolveItemContext(tooltip, link, context)
@@ -127,7 +116,6 @@ local function OnTooltipItem(_, tooltip, link, context)
     ApplyBorder(tooltip, itemData.quality)
     ApplyStackCount(tooltip, itemData)
     ApplyItemIcon(tooltip, itemData)
-    ApplyItemIDLine(tooltip, itemData)
 end
 
 local M = {}
@@ -140,8 +128,5 @@ function M:Enable()
     addon.MM:AttachTrigger("Item", "tooltip:item", self.cbItem, "tooltip:item")
 end
 
-function M:Disable() end
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("Item", M)

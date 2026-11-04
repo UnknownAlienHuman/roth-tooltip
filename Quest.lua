@@ -1,5 +1,5 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 
 local function QuestColor(questID)
     if type(questID) ~= "number" then return nil end
@@ -47,8 +47,5 @@ function M:Enable()
     addon.MM:AttachTrigger("Quest", "tooltip:genericid", self.cbGeneric, "tooltip:quest")
 end
 
-function M:Disable() end
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("Quest", M)

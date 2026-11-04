@@ -407,11 +407,11 @@ end
 
 EnsureStyle = function(tooltip)
     if not addon:IsManagedTooltip(tooltip) then return nil end
+    InstallTooltipHooks(tooltip)
     local style = addon:GetTooltipStyle(tooltip) or CreateStyle(tooltip)
     if not style then return nil end
 
     addon:SafeMethod(style, "Show")
-    InstallTooltipHooks(tooltip)
     HideBlizzardVisuals(tooltip)
     return style
 end

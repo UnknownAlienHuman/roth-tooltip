@@ -6,7 +6,7 @@ The authoritative file order is [RothTooltip.toc](RothTooltip.toc): Safe, Policy
 
 ```text
 Blizzard TooltipDataProcessor
-  -> TooltipProcessor (one permanent registration per type)
+  -> TooltipProcessor (one permanent ALL pre-call and post-call)
   -> Midnight (current-data normalization and restrictions)
   -> private addon.LibEvent
   -> enabled feature subscriber
@@ -26,12 +26,13 @@ There is no loaded legacy processor, bootstrap suppression file or second patch-
 | value/table/object access and tuple preservation | `Engine/Safe.lua` |
 | combat/content policy | `Engine/Policy.lua` |
 | events, callback lifetime, module transitions and counters | `Engine/ModuleManager.lua` |
-| current tooltip context, unit helpers and safe refresh | `Engine/Midnight.lua` |
+| fresh tooltip context, restrictions, line access and safe refresh | `Engine/Midnight.lua` |
 | native data callback registration and type dispatch | `Engine/TooltipProcessor.lua` |
 | managed tooltip membership | `Engine/TooltipRegistry.lua` |
 | style frames, region restoration and backdrop hooks | `Engine/Style.lua` |
 | formatting, media lookup, colors and shared presentation triggers | `Core.lua` |
-| defaults and active profile/status-bar behavior | `Config.lua`, `General.lua` |
+| defaults, schema validation and active store/status bar | `Config.lua`, `Engine/Profile.lua`, `General.lua` |
+| ordinary unit metadata and bounded asynchronous enrichment | `Engine/UnitInfo.lua`, `Engine/UnitStats.lua` |
 | feature caches, timers and optional enrichment | corresponding feature module |
 | Settings mutations, profile dialog and layout editor | `Options/Core.lua`, `Options/Profile.lua`, `Options/DIY.lua`, `Options.lua` |
 | bounded error records and diagnostics UI | `Engine/Doctor.lua`, `Engine/Debug.lua` |
@@ -50,6 +51,14 @@ Registration/profile application establishes the base theme. Feature processors 
 
 SafeCall keeps complete result arity, including `false` and nil holes. Ordinary tuples avoid a result table; mixed tuples replace inaccessible slots without shifting the others. These helpers do not establish permission for an arbitrary API or extend borrowed-data lifetime.
 
+## Data and profile lifetime
+
+`Midnight` re-queries the primary native data on every request; it does not keep a context cache. Only synchronous ordinary context records cross the dispatcher. `UnitInfo` formats current ordinary unit metadata; `UnitStats` owns TTL/capacity-bounded enrichment, pending inspect GUID and cancellation. It stores no unit token, respects native Inspect UI and observed competing requests, and never clears the global inspect target. Modifier refresh is registered only by TooltipRegistry. Native item readiness has no parallel addon refresh tracker.
+
+The model is parented and anchored to UIParent, follows ordinary cursor coordinates independently, and clears on hide, disable, restrictions and world exit. A custom cursor anchor uses ANCHOR_NONE, never a simultaneous native cursor anchor; stale timer generations cannot move or cancel a replacement.
+
+`Profile` validates a detached schema-guided candidate before publication. General commits one active store and then broadcasts. Wrong-type saved leaves recover defaults; a newer saved schema remains untouched. Imports have depth/node/string/range/domain limits, reject cyclic or shared graphs, and preserve account/character isolation. Schema version is independent of addon release metadata.
+
 ## Evidence boundary
 
-[Tests and remaining client gates](tests/README.md) distinguish tested runtime components from untested full-addon integration. A UIParent parent alone does not isolate a widget anchored to restricted tooltip geometry; the existing model and refresh/enrichment paths still require their own review and named-client matrix. Do not infer complete 12.1.5 migration or measured performance from this refactor.
+[Validation](tests/README.md) records Lua 5.1 unit/integration checks, complete TOC Lua execution with mocks and source-contract scope. Native XML template rendering, engine Secret Values/taint/protected execution and performance still require a named client. Source inspection and passing mocks do not certify a release.

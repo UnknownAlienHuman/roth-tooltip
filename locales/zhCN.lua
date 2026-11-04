@@ -151,3 +151,7 @@ addon.L = {
     
     ["TargetBy"] = "被关注",
 }
+
+addon.L["unit.player.showSpecialization"] = "显示专精"
+addon.L["tooltip.spec"] = "专精"
+addon.L["tooltip.role"] = "职责"

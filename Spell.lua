@@ -1,5 +1,5 @@
 local _, addon = ...
-local LibEvent = addon.LibEvent or LibStub:GetLibrary("LibEvent.7000")
+local LibEvent = addon.LibEvent
 
 local function ValidSpellID(value)
     if addon:CanAccessValue(value) and type(value) == "number" and value > 0 then return value end
@@ -111,8 +111,5 @@ function M:Enable()
     addon.MM:AttachTrigger("Spell", "tooltip:spell", self.cbSpell, "tooltip:spell")
 end
 
-function M:Disable() end
-function M:OnTooltip(_) end
-function M:OnStyleChanged(_) end
 
 addon.MM:RegisterModule("Spell", M)

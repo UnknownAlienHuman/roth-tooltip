@@ -731,3 +731,5 @@ Check("restricted tooltip layouts do not create visual attachments", function()
 end)
 
 print(string.format("PASS: %d tests (%s); WoW client not run", passed, _VERSION))
+return { Check = Check, Setup = Setup, Globals = Globals, Visual = Visual, MockSettings = MockSettings,
+    Load = Load, secret = secret, SetClock = function(value) clock = value end, Count = function() return passed end }

@@ -8,7 +8,10 @@ flowchart LR
   Blizzard[Blizzard TooltipDataProcessor] --> Processor[TooltipProcessor]
   Processor --> Context[Midnight ordinary context]
   Context --> Bus
-  General[General active profile] --> MM
+  Profile[Profile schema validation] --> General[General active profile]
+  General --> MM
+  Context --> UnitInfo[UnitInfo ordinary metadata]
+  Modules --> Stats[UnitStats bounded enrichment]
   Options[Settings and slash commands] --> MM
   Options --> General
   Bus --> Modules[Enabled feature subscribers]

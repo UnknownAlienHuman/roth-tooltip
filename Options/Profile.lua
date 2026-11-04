@@ -8,17 +8,25 @@ local function PrintMessage(message, errorState)
     print("|cffffe4e1[RothTooltip]|r" .. color .. tostring(message or "") .. "|r")
 end
 
+local MAX_PROFILE_BYTES = 65536
+
 local function SerializeProfile()
     if not C_EncodingUtil or type(C_EncodingUtil.SerializeJSON) ~= "function" then return nil end
-    local ok, result = pcall(C_EncodingUtil.SerializeJSON, addon.db)
-    if ok and type(result) == "string" then return result end
+    local ok, result = pcall(C_EncodingUtil.SerializeJSON, { format = "RothTooltip", encodingVersion = 1, profile = addon.db })
+    if ok and type(result) == "string" and #result <= MAX_PROFILE_BYTES then return result end
 end
 
 local function DeserializeProfile(text)
-    if type(text) ~= "string" or text == "" then return nil end
+    if type(text) ~= "string" or text == "" or #text > MAX_PROFILE_BYTES then return nil end
     if not C_EncodingUtil or type(C_EncodingUtil.DeserializeJSON) ~= "function" then return nil end
     local ok, result = pcall(C_EncodingUtil.DeserializeJSON, text)
-    if ok and type(result) == "table" then return result end
+    if not ok or type(result) ~= "table" then return nil end
+    if result.format ~= nil then
+        if result.format ~= "RothTooltip" or result.encodingVersion ~= 1 then return nil end
+        return result.profile
+    end
+    return result -- Legacy unwrapped JSON still passes the same strict schema.
+
 end
 
 local function EnsureResetPopup()
@@ -52,6 +60,7 @@ local function CreateProfileDialog()
     local ok, dialog = pcall(CreateFrame, "Frame", nil, UIParent, "RothTooltipVariablesTemplate")
     if not ok or not addon:IsObjectAccessible(dialog) then return nil end
 
+    dialog.textarea.text:SetMaxLetters(MAX_PROFILE_BYTES)
     dialog:SetFrameStrata("DIALOG")
     dialog:SetClampedToScreen(true)
     dialog:EnableMouse(true)

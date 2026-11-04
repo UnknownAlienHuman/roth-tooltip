@@ -5,7 +5,7 @@ addon.L = {
     ["general.statusbarOffsetX"] = "Statusbar Margin-X (0:Default)",
     ["general.statusbarOffsetY"] = "Statusbar Offset Y (0:Default)",
     ["general.alwaysShowIdInfo"] = "Always Show Id Info (Otherwise hold down SHIFT/ALT)",
-    ["general.skinMoreFrames"]   = "Skin More Frames |cffcccc33(need to /reload)|r",
+    ["general.skinMoreFrames"]   = "Skin Additional Frames",
     ["item.showItemID"]          = "Show Item ID",
     ["unit.player.showItemLevel"] = "Show Item Level",
     ["unit.player.showPveScore"]  = "Show Mythic+ Score",
@@ -36,9 +36,13 @@ addon.L = {
     ["general.combatPolicy"] = "Combat policy (in combat)",
     ["combatPolicy.desc.STRICT"] = "In combat: items only (plus skin/anchor). Safest mode.",
     ["combatPolicy.desc.BALANCED"] = "In combat: items + spells. Unit/aura are blocked.",
-    ["combatPolicy.desc.AGGRESSIVE"] = "In combat: everything. Risk of taint/SecretValue errors.",
+    ["combatPolicy.desc.AGGRESSIVE"] = "In combat: accessible non-unit content. Native restrictions always apply.",
     ["dropdown.STRICT"] = "|cffaaaaaaSTRICT|r (safe)",
     ["dropdown.BALANCED"] = "|cff33ccffBALANCED|r (spells)",
-    ["dropdown.AGGRESSIVE"] = "|cffff3333AGGRESSIVE|r (risk)",
+    ["dropdown.AGGRESSIVE"] = "|cffffcc33AGGRESSIVE|r (accessible content)",
     ["modules.note"] = "Disable modules to reduce risk/performance. Some changes require opening a new tooltip to take effect.",
 }
+
+addon.L["unit.player.showSpecialization"] = "Show Specialization"
+addon.L["tooltip.spec"] = "Specialization"
+addon.L["tooltip.role"] = "Role"
