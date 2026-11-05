@@ -13,11 +13,39 @@ ROOT = Path(__file__).resolve().parents[1]
 TOC = ROOT / "RothTooltip.toc"
 
 REQUIRED_LOAD_ORDER = [
-    "Engine/TooltipBootstrap.lua",
+    "Engine/Safe.lua",
     "Core.lua",
     "Engine/Midnight.lua",
-    "Engine/Runtime12_1.lua",
+    "Engine/UnitInfo.lua",
+    "Engine/Style.lua",
+    "Engine/TooltipRegistry.lua",
     "Engine/TooltipProcessor.lua",
+    "Config.lua",
+    "Engine/Profile.lua",
+    "General.lua",
+    "Engine/UnitStats.lua",
+    "Unit.lua",
+]
+
+OBSOLETE_PATHS = [
+    "Compat_MoneyFrame.lua",
+    "Engine/TooltipBootstrap.lua",
+    "Engine/Runtime12_1.lua",
+    "todo.md",
+    "libs/lib.xml",
+    ".github/workflows/audit-export.yml",
+    ".github/workflows/normalize-runtime.yml",
+    ".github/workflows/audit-source-export.yml",
+    ".github/workflows/audit-donors-export.yml",
+    ".github/workflows/apply-single-runtime.yml",
+    ".github/workflows/audit-pass3-export.yml",
+    ".github/workflows/export-pass3-baseline.yml",
+    ".github/workflows/audit-pass4-export.yml",
+    ".github/workflows/audit4-export.yml",
+    ".github/workflows/export-pass4-baseline.yml",
+    ".github/workflows/publish-pass4.yml",
+    ".audit-transfer",
+    ".refactor_payload",
 ]
 
 
@@ -30,15 +58,62 @@ def normalize_repo_path(value: str) -> str:
     return value.strip().replace("\\", "/")
 
 
-def strip_lua_line_comments(source: str) -> str:
-    """Remove line comments for narrow policy-pattern checks.
+def strip_lua_comments(source: str) -> str:
+    """Strip Lua comments for narrow invariant checks.
 
-    This is deliberately not a Lua lexer. The checked patterns are identifiers,
-    not string literals, and the repository's comments commonly name forbidden
-    constructs while documenting why they are excluded.
+    This scanner preserves quoted strings and is intentionally limited to
+    comment removal. Lua 5.1 itself remains the syntax source of truth in CI.
     """
 
-    return "\n".join(line.split("--", 1)[0] for line in source.splitlines())
+    output: list[str] = []
+    index = 0
+    length = len(source)
+    quote: str | None = None
+
+    while index < length:
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < length else ""
+
+        if quote:
+            output.append(char)
+            if char == "\\":
+                if index + 1 < length:
+                    index += 1
+                    output.append(source[index])
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+
+        if char in {"'", '"'}:
+            quote = char
+            output.append(char)
+            index += 1
+            continue
+
+        if char == "-" and next_char == "-":
+            long_match = re.match(r"--\[(=*)\[", source[index:])
+            if long_match:
+                equals = long_match.group(1)
+                closing = f"]{equals}]"
+                end = source.find(closing, index + long_match.end())
+                if end == -1:
+                    return "".join(output)
+                output.append("\n" * source[index : end + len(closing)].count("\n"))
+                index = end + len(closing)
+                continue
+
+            end = source.find("\n", index)
+            if end == -1:
+                break
+            output.append("\n")
+            index = end + 1
+            continue
+
+        output.append(char)
+        index += 1
+
+    return "".join(output)
 
 
 def read_toc() -> tuple[list[str], dict[str, str]]:
@@ -65,20 +140,25 @@ def read_toc() -> tuple[list[str], dict[str, str]]:
 def validate_toc() -> list[str]:
     files, metadata = read_toc()
 
-    if metadata.get("Interface") != "120100":
-        fail(f"expected Interface 120100, got {metadata.get('Interface')!r}")
-    if metadata.get("Version") != "12.1.0":
-        fail(f"expected Version 12.1.0, got {metadata.get('Version')!r}")
-    if "Compat_MoneyFrame.lua" in files:
-        fail("obsolete Compat_MoneyFrame.lua is still loaded")
-    if (ROOT / "Compat_MoneyFrame.lua").exists():
-        fail("obsolete Compat_MoneyFrame.lua still exists")
+    if metadata.get("Interface") != "120105":
+        fail(f"expected Interface 120105, got {metadata.get('Interface')!r}")
+    if metadata.get("Version") != "12.1.5":
+        fail(f"expected Version 12.1.5, got {metadata.get('Version')!r}")
+
+    for obsolete in OBSOLETE_PATHS:
+        if obsolete in files:
+            fail(f"obsolete file is still loaded: {obsolete}")
+        if (ROOT / obsolete).exists():
+            fail(f"obsolete or temporary path still exists: {obsolete}")
+
+    if len(files) != len(set(files)):
+        fail("TOC contains duplicate file entries")
 
     for relative in files:
         if not (ROOT / relative).is_file():
             fail(f"TOC references missing file: {relative}")
 
-    positions = {}
+    positions: dict[str, int] = {}
     for required in REQUIRED_LOAD_ORDER:
         try:
             positions[required] = files.index(required)
@@ -157,41 +237,214 @@ def validate_markdown_links() -> None:
                 )
 
 
-def validate_runtime_markers() -> None:
-    bootstrap = (ROOT / "Engine/TooltipBootstrap.lua").read_text(encoding="utf-8")
-    core = (ROOT / "Core.lua").read_text(encoding="utf-8")
-    processor = (ROOT / "Engine/TooltipProcessor.lua").read_text(encoding="utf-8")
-    midnight = (ROOT / "Engine/Midnight.lua").read_text(encoding="utf-8")
-    processor_code = strip_lua_line_comments(processor)
+def read_lua(path: str) -> tuple[str, str]:
+    raw = (ROOT / path).read_text(encoding="utf-8")
+    return raw, strip_lua_comments(raw)
 
-    if "__RT_DeferTooltipProcessor = true" not in bootstrap:
-        fail("Tooltip bootstrap no longer defers the legacy Core processor")
-    if "function addon:InitTooltipDataProcessor" not in processor:
+
+def collect_loaded_files() -> set[str]:
+    """Resolve the actual TOC/XML graph; tests are not addon runtime code."""
+    loaded: set[str] = set()
+
+    def visit(path: Path) -> None:
+        path = path.resolve()
+        if not path.is_relative_to(ROOT) or not path.is_file():
+            fail(f"invalid loaded path: {path}")
+        relative = path.relative_to(ROOT).as_posix()
+        if relative in loaded:
+            fail(f"duplicate load through TOC/XML: {relative}")
+        loaded.add(relative)
+        if path.suffix == ".xml":
+            for element in ET.parse(path).iter():
+                ref = element.attrib.get("file")
+                if ref and element.tag.rsplit("}", 1)[-1] in {"Script", "Include"}:
+                    visit(resolve_xml_reference(path, ref))
+
+    for relative in read_toc()[0]:
+        visit(ROOT / relative)
+    return loaded
+
+
+def validate_runtime_invariants() -> None:
+    safe_raw, _ = read_lua("Engine/Safe.lua")
+    _, core = read_lua("Core.lua")
+    midnight_raw, _ = read_lua("Engine/Midnight.lua")
+    style_raw, style = read_lua("Engine/Style.lua")
+    processor_raw, processor = read_lua("Engine/TooltipProcessor.lua")
+    registry_raw, _ = read_lua("Engine/TooltipRegistry.lua")
+    manager_raw, manager = read_lua("Engine/ModuleManager.lua")
+    profile_raw, profile = read_lua("Engine/Profile.lua")
+    unit_info_raw, _ = read_lua("Engine/UnitInfo.lua")
+    unit_stats_raw, _ = read_lua("Engine/UnitStats.lua")
+    options_raw, _ = read_lua("Options.lua")
+    options_core_raw, _ = read_lua("Options/Core.lua")
+    profile_dialog_raw, _ = read_lua("Options/Profile.lua")
+    diy_raw, _ = read_lua("Options/DIY.lua")
+    spell_raw, spell = read_lua("Spell.lua")
+    skin_frames_raw, _ = read_lua("SkinFrames.lua")
+    anchor_raw, _ = read_lua("Anchor.lua")
+    config_raw = (ROOT / "Config.lua").read_text(encoding="utf-8")
+
+    if "canaccessvalue" not in safe_raw or "canaccessallvalues" not in safe_raw:
+        fail("Safe.lua is missing Retail capability gates")
+    if "C_Secrets" not in midnight_raw or "ShouldSpellAuraBeSecret" not in midnight_raw:
+        fail("Midnight.lua is missing the Retail 12.1 restriction boundary")
+    if "function addon:InitTooltipDataProcessor" not in processor_raw:
         fail("Retail TooltipDataProcessor entrypoint is missing")
-    if "canaccessvalue" not in midnight or "C_Secrets" not in midnight:
-        fail("Retail access/restriction boundary is incomplete")
-    if "canaccessvalue" not in core:
-        fail("legacy Core helpers are no longer aligned with canaccessvalue")
-    if "pcall(function() return v == v end)" in core:
-        fail("comparison-based secret probing was restored in Core.lua")
-    if "data.args" in processor_code or "tooltipData.args" in processor_code:
-        fail("Retail processor references raw TooltipData args")
-    if 'LibEvent:trigger("tooltip:aura", tooltip, data' in processor_code:
+    if "function addon:RegisterTooltipFrame" not in registry_raw:
+        fail("managed tooltip registry API is missing")
+    if "ADDON_RESTRICTION_STATE_CHANGED" not in registry_raw:
+        fail("addon restriction changes no longer invalidate tooltip context")
+    if "SPELL_SECRECY_CHANGED" in registry_raw:
+        fail("unknown SPELL_SECRECY_CHANGED event was restored")
+
+    loaded = collect_loaded_files()
+    all_lua_code = "\n".join(
+        strip_lua_comments((ROOT / path).read_text(encoding="utf-8"))
+        for path in sorted(loaded) if path.endswith(".lua")
+    )
+    for path in ROOT.rglob("*.lua"):
+        relative = path.relative_to(ROOT).as_posix()
+        if not relative.startswith("tests/") and relative not in loaded:
+            fail(f"unloaded runtime Lua file: {relative}")
+    if list((ROOT / "tools").glob("_*.py")):
+        fail("obsolete patch-rewriting scripts remain")
+    if re.search(r"\bRothTooltip\s*=\s*addon\b", all_lua_code):
+        fail("the mutable addon namespace is exposed as a global")
+    if re.search(r"\baddon\.G\b", all_lua_code):
+        fail("dead global-lookup compatibility state remains")
+    if "variables = {}" in (ROOT / "Config.lua").read_text(encoding="utf-8"):
+        fail("dead variables defaults remain")
+    if "order = {}" not in manager_raw or "ipairs(self.order)" not in manager:
+        fail("module activation order is not deterministic")
+    if "bus.depth" not in manager_raw or "entry.pending" not in manager_raw:
+        fail("reentrant event-bus subscriptions are not transaction-isolated")
+    if "not entry.pending" not in manager:
+        fail("pending event-bus subscriptions leak through subscriber queries")
+    if "pendingInspectTimer" not in unit_stats_raw or "C_Timer.NewTimer" not in unit_stats_raw:
+        fail("inspect timeout is not owned and cancellable")
+    if "IsValidElementFormat" not in options_core_raw:
+        fail("live wildcard writes bypass the profile validator")
+    if "CanAccessTable(result)" not in profile_dialog_raw:
+        fail("decoded profile documents are not access-gated")
+    portable_gate = profile_raw.find('kind ~= "table" or not addon:CanAccessTable(value)')
+    portable_meta = profile_raw.find("getmetatable(value)")
+    if portable_gate < 0 or portable_meta < 0 or portable_gate > portable_meta:
+        fail("profile validation inspects table metadata before the access gate")
+    if "CopyLayoutRows" not in diy_raw or "NormalizeProfile" not in diy_raw or "__RT_ProfileGeneration" not in diy_raw:
+        fail("DIY layout edits are not detached, validated and generation-gated")
+    if "function addon:SetModuleEnabled" not in manager_raw or "RefreshManagedTooltipsMatching" not in manager_raw:
+        fail("module transitions do not own visible exact-source refresh")
+    if "NotifyAllSettings" not in options_core_raw or "Settings.NotifyUpdate" not in options_core_raw:
+        fail("profile replacement does not notify registered Settings proxies")
+    if "RaidDifficultyRank" not in unit_stats_raw or "GetDifficultyInfo" not in unit_stats_raw:
+        fail("raid progress still infers difficulty order from numeric IDs")
+    cursor_resolve = anchor_raw.find("ResolveCursorPoint(mode, point, offsetX, offsetY)")
+    cursor_owner = anchor_raw.find('pcall(setOwner, tooltip, parent, "ANCHOR_NONE")')
+    if cursor_resolve < 0 or cursor_owner < 0 or cursor_resolve > cursor_owner:
+        fail("cursor anchoring claims ANCHOR_NONE before geometry is available")
+    for source, label in ((config_raw, "Config.lua"), (options_raw, "Options.lua")):
+        if "npcTitle" in source:
+            fail(f"dead npcTitle setting remains in {label}")
+        if "itemQuality" in source:
+            fail(f"dead unit itemQuality mode remains in {label}")
+    if "addon.colorfunc.itemQuality" in core:
+        fail("dead unit itemQuality color producer remains")
+    if "IconBorder" in spell or "ApplyIconFallback" in spell or 'SafeGet(frame, "Icon")' in spell:
+        fail("Spell.lua mutates Blizzard-owned icon or border regions")
+    if "QuestScrollFrame" in skin_frames_raw or "QuestMapLog_GetStoryTooltip" not in skin_frames_raw:
+        fail("SkinFrames uses a private story-tooltip field instead of the public helper")
+    if "GeneralDockManagerOverflowButtonList" in skin_frames_raw:
+        fail("SkinFrames still targets an absent non-tooltip frame")
+    if "ElementsUseFilter" not in unit_info_raw or '"sameguild"' not in unit_info_raw:
+        fail("same-guild filters do not own their metadata dependency")
+    if "forceHideText" in all_lua_code:
+        fail("obsolete foreign status-bar compatibility field remains")
+    if "StyleByTooltip[tooltip]" not in style_raw or "style ~= nil" not in style_raw:
+        fail("temporary style access denial can create a replacement owner")
+    if "lineCount = math.min(128" not in midnight_raw:
+        fail("tooltip line enumeration is not bounded")
+    if "for index = 1, 64" not in unit_stats_raw or "math.min(256" not in unit_stats_raw:
+        fail("native enrichment collections are not bounded")
+    if 'type(config) ~= "table" or config.enable ~= true' not in core:
+        fail("element enable state is not checked before modifier filter bypass")
+
+    locale_code = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "locales").glob("*.lua"))
+    for stale_key in ("tooltip.itemID", "tooltip.raidProgress", "spell.background", "spell.borderColor"):
+        if stale_key in locale_code:
+            fail(f"dead locale key remains: {stale_key}")
+
+    for symbol in ("GetPrimaryTooltipContext", "RefreshTooltipSafe", "RegisterTooltipFrame", "NormalizeProfile"):
+        if all_lua_code.count("function addon:" + symbol + "(") != 1:
+            fail(f"expected one owner for {symbol}")
+    if all_lua_code.count('"MODIFIER_STATE_CHANGED"') != 1:
+        fail("modifier refresh must have exactly one owner")
+    if "ContextByTooltip" in all_lua_code or "pendingInspectUnit" in all_lua_code:
+        fail("borrowed unit/context identity is retained")
+    if "GET_ITEM_INFO_RECEIVED" in all_lua_code:
+        fail("native tooltip item readiness has a parallel refresh owner")
+    if re.search(r'\bClearInspectPlayer\s*\(', all_lua_code):
+        fail("addon clears the shared inspect channel")
+    if "HybridScrollFrame_CreateButtons" in all_lua_code:
+        fail("private achievement frame scraping was restored")
+    model = strip_lua_comments((ROOT / "Model.lua").read_text(encoding="utf-8"))
+    if re.search(r'"SetPoint"[^\n]*\btooltip\b', model):
+        fail("model layout depends on native tooltip geometry")
+    if all_lua_code.count("function addon:InitTooltipDataProcessor") != 1:
+        fail("there must be exactly one tooltip processor implementation")
+
+    forbidden_core_patterns = {
+        "TooltipDataProcessor": "Core.lua contains a shadow tooltip processor",
+        "RebuildFromTooltipInfo": "Core.lua contains raw tooltip rebuild logic",
+        "UnitTokenFromGUID": "Core.lua contains unit identity reconstruction",
+        '"mouseover"': "Core.lua contains mouseover identity recovery",
+        "data.args": "Core.lua reads raw TooltipData arguments",
+        "tooltipData.args": "Core.lua reads raw TooltipData arguments",
+        "__RT_Last": "Core.lua stores legacy tooltip side-channel state",
+    }
+    for pattern, message in forbidden_core_patterns.items():
+        if pattern in core:
+            fail(message)
+
+    forbidden_global_patterns = {
+        "dataTypes.Action": "nonexistent TooltipDataType.Action was restored",
+        "pcall(function() return v == v end)": "comparison-based secret probing was restored",
+        "RebuildFromTooltipInfo(": "raw tooltip replay was restored",
+        "data.args": "raw TooltipData argument vectors are inspected",
+        "tooltipData.args": "raw TooltipData argument vectors are inspected",
+    }
+    for pattern, message in forbidden_global_patterns.items():
+        if pattern in all_lua_code:
+            fail(message)
+
+    if re.search(
+        r"LibEvent:trigger\(\s*[\"']tooltip:aura[\"']\s*,\s*tooltip\s*,\s*(?:data|tooltipData)",
+        processor,
+    ):
         fail("Retail processor forwards a raw aura payload")
-    if "RebuildFromTooltipInfo(" in midnight:
-        fail("Midnight runtime actively calls RebuildFromTooltipInfo")
-    if (ROOT / ".github/workflows/normalize-runtime.yml").exists():
-        fail("one-time source-normalization workflow must not remain in the repository")
+    if re.search(r"\b(?:tip|tooltip)\.(?:GetBackdrop|GetBackdropColor|GetBackdropBorderColor)\s*=", style):
+        fail("Style.lua replaces Blizzard tooltip methods")
+    if ".__RT_HideBgCache" in style or ".__RTStyle" in style:
+        fail("Style.lua stores visual bookkeeping on Blizzard tooltip fields")
+    if "GetRegions" in style:
+        fail("Style.lua enumerates potentially secret-returning frame regions")
+    if re.search(r"\b(?:tip|tooltip|bar)\.(?:BigFactionIcon|TextString|forceHideText)\s*=", all_lua_code):
+        fail("addon bookkeeping was restored on a Blizzard tooltip/status bar")
+
+    if "setmetatable({}, { __mode = \"k\" })" not in style_raw:
+        fail("Style.lua no longer owns tooltip state in weak-key tables")
+    if "setmetatable({}, { __mode = \"k\" })" not in registry_raw:
+        fail("TooltipRegistry.lua no longer uses a weak managed-tooltip set")
 
 
 def main() -> int:
     toc_files = validate_toc()
     validate_xml_graph(toc_files)
     validate_markdown_links()
-    validate_runtime_markers()
+    validate_runtime_invariants()
     print(
-        "Repository manifest, XML graph, Markdown links, and Retail 12.1 "
-        "boundary invariants are valid."
+        "Repository manifest, XML graph, Markdown links, and Retail 12.1.5 "
+        "runtime invariants are valid."
     )
     return 0
 

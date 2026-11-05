@@ -1,5 +1,5 @@
 
-local addon = RothTooltip or select(2, ...)
+local _, addon = ...
 
 if (GetLocale() ~= "zhTW") then return end
 
@@ -26,7 +26,7 @@ addon.L = {
     ["general.anchor.hiddenInCombat"]       = "戰鬥時隱藏",
     ["general.anchor.returnOnUnitFrame"]    = "UnitFrame上固定",
     ["general.alwaysShowIdInfo"]            = "始終顯示id信息(關閉後按住alt/shift顯示)",
-    ["general.skinMoreFrames"]              = "樣式應用于更多框架 |cffcccc33(重載生效)|r",
+    ["general.skinMoreFrames"] = "樣式套用至更多提示框",
     ["general.SavedVariablesPerCharacter"]  = "為每個角色保存獨立配置",
     
     ["item.coloredItemBorder"]              = "物品邊框染色",
@@ -40,7 +40,6 @@ addon.L = {
     ["unit.player.background"]              = "背景染色",
     ["unit.player.coloredBorder"]           = "邊框染色",
     ["unit.player.showTarget"]              = "顯示目標",
-    ["unit.player.showTargetBy"]            = "顯示被關注",
     ["unit.player.showModel"]               = "顯示模型",
     ["unit.player.grayForDead"]             = "死亡目標灰度染色",
     ["unit.player.elements.factionBig"]     = "右上陣營大圖",
@@ -77,14 +76,12 @@ addon.L = {
     ["unit.npc.background"]                 = "背景染色",
     ["unit.npc.coloredBorder"]              = "邊框染色",
     ["unit.npc.showTarget"]                 = "顯示目標",
-    ["unit.npc.showTargetBy"]               = "顯示被關注數",
     ["unit.npc.showModel"]                  = "顯示模型",
     ["unit.npc.grayForDead"]                = "死亡目標灰度染色",
     ["unit.npc.elements.factionBig"]        = "右上陣營大圖",
     ["unit.npc.elements.raidIcon"]          = "標記圖標",
     ["unit.npc.elements.classIcon"]         = "職業圖標",
     ["unit.npc.elements.questIcon"]         = "任務圖標",
-    ["unit.npc.elements.npcTitle"]          = "頭銜",
     ["unit.npc.elements.name"]              = "名稱",
     ["unit.npc.elements.levelValue"]        = "等級",
     ["unit.npc.elements.classifBoss"]       = "首領",
@@ -94,8 +91,6 @@ addon.L = {
     ["unit.npc.elements.reactionName"]      = "聲望",
     ["unit.npc.elements.moveSpeed"]         = "移動速度",
     
-    ["spell.background"]                    = "背景顔色",
-    ["spell.borderColor"]                   = "邊框顔色",
     ["spell.showIcon"]                      = "法術圖標",
     
     ["dropdown.inherit"]        = "|cffffee00繼承全局|r",
@@ -111,7 +106,6 @@ addon.L = {
     ["dropdown.class"]          = "職業染色",
     ["dropdown.level"]          = "等差染色",
     ["dropdown.reaction"]       = "聲望染色",
-    ["dropdown.itemQuality"]    = "物品品質染色",
     ["dropdown.selection"]      = "類型染色",
     ["dropdown.faction"]        = "陣營染色",
     ["dropdown.dark"]           = "深黑",
@@ -130,6 +124,7 @@ addon.L = {
     ["dropdown.ininstance"]     = "副本時",
     ["dropdown.samerealm"]      = "同伺服",
     ["dropdown.samecrossrealm"]     = "同跨伺服",
+    ["dropdown.sameguild"] = "同公會",
     ["dropdown.not reaction5"]      = "|cffff3333非|r聲望友好以上",
     ["dropdown.not reaction6"]      = "|cffff3333非|r聲望尊敬以上",
     ["dropdown.not inraid"]         = "|cffff3333非|r團隊時",
@@ -139,6 +134,7 @@ addon.L = {
     ["dropdown.not ininstance"]     = "|cffff3333非|r副本時",
     ["dropdown.not samerealm"]      = "|cffff3333非|r同伺服",
     ["dropdown.not samecrossrealm"]  = "|cffff3333非|r同跨伺服",
+    ["dropdown.not sameguild"] = "|cffff3333非|r同公會",
     
     ["headerFont"]        = "標頭字體",
     ["headerFontSize"]    = "標頭字體大小",
@@ -149,5 +145,13 @@ addon.L = {
     
     ["Anchor"]   = "錨點器",
     
-    ["TargetBy"] = "被關注",
+    ["general.combatPolicy"] = "戰鬥策略（戰鬥中）",
+    ["combatPolicy.desc.STRICT"] = "戰鬥中：僅處理物品（以及外觀和錨點）。最安全。",
+    ["combatPolicy.desc.BALANCED"] = "戰鬥中：處理物品和法術；單位和光環停用。",
+    ["combatPolicy.desc.AGGRESSIVE"] = "戰鬥中：處理可存取的非單位內容；始終遵守原生限制。",
+    ["modules.note"] = "可停用不需要的模組以減少負擔和風險。部分變更需重新開啟提示框才會生效。",
 }
+
+addon.L["unit.player.showSpecialization"] = "顯示專精"
+addon.L["tooltip.spec"] = "專精"
+addon.L["tooltip.role"] = "職責"

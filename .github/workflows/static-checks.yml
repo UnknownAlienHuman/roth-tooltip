@@ -1,7 +1,12 @@
 name: Static checks
 
 on:
+  pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,6 +28,9 @@ jobs:
           find . -type f -name '*.lua' -not -path './.git/*' -print0 \
             | sort -z \
             | xargs -0 -n 1 luac5.1 -p
+
+      - name: Run runtime and complete Lua bootstrap regressions
+        run: lua5.1 tests/integration.lua
 
       - name: Validate manifest and documentation
         run: python3 tools/check_repo.py

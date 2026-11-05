@@ -1,21 +1,19 @@
 
-local addon = RothTooltip or select(2, ...)
+local _, addon = ...
 
 addon.L = {
     ["general.statusbarOffsetX"] = "Statusbar Margin-X (0:Default)",
     ["general.statusbarOffsetY"] = "Statusbar Offset Y (0:Default)",
     ["general.alwaysShowIdInfo"] = "Always Show Id Info (Otherwise hold down SHIFT/ALT)",
-    ["general.skinMoreFrames"]   = "Skin More Frames |cffcccc33(need to /reload)|r",
+    ["general.skinMoreFrames"] = "Skin Additional Tooltips",
     ["item.showItemID"]          = "Show Item ID",
     ["unit.player.showItemLevel"] = "Show Item Level",
     ["unit.player.showPveScore"]  = "Show Mythic+ Score",
     ["unit.player.showBestKey"]   = "Show Best Mythic+ Key",
     ["unit.player.showRaidProgress"] = "Show Raid Progress",
-    ["tooltip.itemID"]           = "ItemID",
     ["tooltip.itemLevel"]        = "Item Level",
     ["tooltip.pveScore"]         = "PvE Score",
     ["tooltip.bestKey"]         = "Best M+ Key",
-    ["tooltip.raidProgress"]    = "Raid Progress",
     ["dropdown.inherit"]        = "|cffffee00inherit|r",
     ["dropdown.default"]        = "|cffaaaaaadefault|r",
     ["dropdown.cursor"]         = "|cff33ccffcursor|r",
@@ -29,16 +27,20 @@ addon.L = {
     ["dropdown.not inarena"]        = "|cffff3333not|r inarena",
     ["dropdown.not ininstance"]     = "|cffff3333not|r ininstance",
     ["dropdown.not samerealm"]      = "|cffff3333not|r samerealm",
+    ["dropdown.sameguild"] = "same guild",
     ["dropdown.not samecrossrealm"]  = "|cffff3333not|r sameCrossrealm",
-    ["TargetBy"]                    = "Targeted By",
-    ["showTargetBy"]                = "Show Targeted By",
+    ["dropdown.not sameguild"] = "|cffff3333not|r same guild",
 
     ["general.combatPolicy"] = "Combat policy (in combat)",
     ["combatPolicy.desc.STRICT"] = "In combat: items only (plus skin/anchor). Safest mode.",
     ["combatPolicy.desc.BALANCED"] = "In combat: items + spells. Unit/aura are blocked.",
-    ["combatPolicy.desc.AGGRESSIVE"] = "In combat: everything. Risk of taint/SecretValue errors.",
+    ["combatPolicy.desc.AGGRESSIVE"] = "In combat: accessible non-unit content. Native restrictions always apply.",
     ["dropdown.STRICT"] = "|cffaaaaaaSTRICT|r (safe)",
     ["dropdown.BALANCED"] = "|cff33ccffBALANCED|r (spells)",
-    ["dropdown.AGGRESSIVE"] = "|cffff3333AGGRESSIVE|r (risk)",
-    ["modules.note"] = "Disable modules to reduce risk/performance. Some changes require opening a new tooltip to take effect.",
+    ["dropdown.AGGRESSIVE"] = "|cffffcc33AGGRESSIVE|r (accessible content)",
+    ["modules.note"] = "Disable unused modules to reduce overhead and risk. Some changes require opening a new tooltip to take effect.",
 }
+
+addon.L["unit.player.showSpecialization"] = "Show Specialization"
+addon.L["tooltip.spec"] = "Specialization"
+addon.L["tooltip.role"] = "Role"

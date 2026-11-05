@@ -1,5 +1,5 @@
 <Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/
-C:\Projects\WoW\Bin\Interface\FrameXML\UI.xsd">
+..\FrameXML\UI.xsd">
 
     <Frame name="RothTooltipVariablesTemplate" inherits="InsetFrameTemplate3" virtual="true">
 		<Size>
@@ -21,7 +21,7 @@ C:\Projects\WoW\Bin\Interface\FrameXML\UI.xsd">
 					</Anchor>
 				</Anchors>
 				<ScrollChild>
-					<EditBox parentKey="text" name="$parentEditBox" autoFocus="false" multiLine="true" letters="66666">
+					<EditBox parentKey="text" name="$parentEditBox" autoFocus="false" multiLine="true" letters="65536">
 						<Size>
 							<AbsDimension x="480" y="400"/>
 						</Size>
@@ -33,9 +33,6 @@ C:\Projects\WoW\Bin\Interface\FrameXML\UI.xsd">
 							</Anchor>
 						</Anchors>
 						<Scripts>
-							<OnTextChanged>
-								
-							</OnTextChanged>
 							<OnEscapePressed>
 								self:ClearFocus();
 							</OnEscapePressed>

@@ -1,85 +1,116 @@
--- RothTooltip Engine: Safe helpers
--- Retail 12.1: inaccessible values are capability-gated, not probed through
--- comparisons or protected retry loops.
-
 local _, addon = ...
-RothTooltip = addon
 
-addon.Safe = addon.Safe or {}
-
-local CanAccessValueAPI = type(canaccessvalue) == "function" and canaccessvalue or nil
-local CanAccessAllValuesAPI = type(canaccessallvalues) == "function" and canaccessallvalues or nil
-local IsSecretValueAPI = type(issecretvalue) == "function" and issecretvalue or nil
-
-local function CanAccessValue(value)
-    if CanAccessValueAPI then
-        return CanAccessValueAPI(value) == true
-    end
-    if IsSecretValueAPI then
-        return IsSecretValueAPI(value) ~= true
-    end
-    return true
-end
+local accessValue = canaccessvalue
+local accessAll = canaccessallvalues
+local accessTable = canaccesstable
+local isSecret = issecretvalue
+local unpack = unpack or table.unpack
 
 function addon:CanAccessValue(value)
-    return CanAccessValue(value)
+    if type(accessValue) == "function" then return accessValue(value) == true end
+    if type(isSecret) == "function" then return isSecret(value) ~= true end
+    return false
 end
 
 function addon:CanAccessAllValues(...)
-    if CanAccessAllValuesAPI then
-        return CanAccessAllValuesAPI(...) == true
-    end
-
+    if type(accessAll) == "function" then return accessAll(...) == true end
     for index = 1, select("#", ...) do
-        if not CanAccessValue(select(index, ...)) then return false end
+        if not self:CanAccessValue(select(index, ...)) then return false end
     end
     return true
 end
 
-function addon:IsSecret(value)
-    return not CanAccessValue(value)
+function addon:CanAccessTable(value)
+    return self:CanAccessValue(value) and type(value) == "table"
+        and type(accessTable) == "function" and accessTable(value) == true
 end
 
--- SafeCall is error containment for already-accessible inputs. Its outputs are
--- independently gated before they cross back into addon code.
+function addon:SafeBoolean(value)
+    if not self:CanAccessValue(value) or value == nil then return nil end
+    return not not value
+end
+
+function addon:SafeToString(value, fallback)
+    if not self:CanAccessValue(value) then return fallback or "??" end
+    if value == nil then return fallback end
+    if type(value) == "string" then return value end
+    local ok, text = pcall(tostring, value)
+    if ok and self:CanAccessValue(text) and type(text) == "string" then return text end
+    return fallback or "??"
+end
+
+local function Results(tag, ok, ...)
+    if not ok then
+        if addon.DoctorLog then
+            pcall(addon.DoctorLog, addon, "lua", tag, select(1, ...))
+        end
+        return nil
+    end
+    -- The ordinary hot path needs no result table. Keep nil slots and arity.
+    if addon:CanAccessAllValues(...) then return ... end
+    local values, count = {}, select("#", ...)
+    for index = 1, count do
+        local value = select(index, ...)
+        if addon:CanAccessValue(value) then values[index] = value end
+    end
+    return unpack(values, 1, count)
+end
+
 function addon:SafeCall(tag, fn, ...)
-    if not CanAccessValue(fn) or type(fn) ~= "function" then return nil end
+    if not self:CanAccessValue(fn) or type(fn) ~= "function" then return nil end
     if not self:CanAccessAllValues(...) then return nil end
+    return Results(tag, pcall(fn, ...))
+end
 
-    local ok, r1, r2, r3, r4, r5, r6, r7, r8 = pcall(fn, ...)
-    if ok then
-        if not CanAccessValue(r1) then r1 = nil end
-        if not CanAccessValue(r2) then r2 = nil end
-        if not CanAccessValue(r3) then r3 = nil end
-        if not CanAccessValue(r4) then r4 = nil end
-        if not CanAccessValue(r5) then r5 = nil end
-        if not CanAccessValue(r6) then r6 = nil end
-        if not CanAccessValue(r7) then r7 = nil end
-        if not CanAccessValue(r8) then r8 = nil end
-        return r1, r2, r3, r4, r5, r6, r7, r8
-    end
+function addon:SafeCallBoolean(fn, ...)
+    return self:SafeBoolean(self:SafeCall("boolean", fn, ...))
+end
 
-    if type(self.DoctorLog) == "function" then
-        local stack = type(debugstack) == "function" and debugstack(2, 20, 20) or nil
-        pcall(self.DoctorLog, self, "lua", tag or "SafeCall", r1, stack)
-    end
-    return nil
+local function ReadMember(object, key)
+    return object[key]
 end
 
 function addon:SafeGet(object, key)
-    if not CanAccessValue(object) or object == nil then return nil end
-    if not CanAccessValue(key) or key == nil then return nil end
+    if not self:CanAccessAllValues(object, key) or object == nil or key == nil then return nil end
+    if type(object) == "table" and not self:CanAccessTable(object) then return nil end
+    local ok, value = pcall(ReadMember, object, key)
+    if ok and self:CanAccessValue(value) then return value end
+end
 
-    local ok, value = pcall(function() return object[key] end)
-    if not ok or not CanAccessValue(value) then return nil end
-    return value
+function addon:IsObjectAccessible(object)
+    if not self:CanAccessValue(object) then return false end
+    local kind = type(object)
+    if kind ~= "table" and kind ~= "userdata" then return false end
+    if kind == "table" and not self:CanAccessTable(object) then return false end
+
+    local fn = self:SafeGet(object, "CanBeAccessedInContext")
+    if type(fn) == "function" then
+        local ok, allowed = pcall(fn, object)
+        if not ok or not self:CanAccessValue(allowed) or allowed ~= true then return false end
+    end
+    fn = self:SafeGet(object, "IsForbidden")
+    if type(fn) == "function" then
+        local ok, forbidden = pcall(fn, object)
+        if not ok or not self:CanAccessValue(forbidden) or forbidden ~= false then return false end
+    end
+    return true
+end
+
+function addon:HasForbiddenAspects(object, aspects)
+    if not self:CanAccessValue(aspects) or not self:IsObjectAccessible(object) then return true end
+    local fn = self:SafeGet(object, "HasAnyForbiddenAspects")
+    if type(fn) ~= "function" then return true end
+    local ok, forbidden = pcall(fn, object, aspects)
+    return not ok or not self:CanAccessValue(forbidden) or forbidden ~= false
+end
+
+function addon:CanBindScripts(object)
+    local aspect = Enum and Enum.ForbiddenAspect and Enum.ForbiddenAspect.ScriptBindings
+    return type(aspect) == "number" and not self:HasForbiddenAspects(object, aspect)
 end
 
 function addon:SafeMethod(object, method, ...)
-    if not CanAccessValue(object) or object == nil then return nil end
-    if self.IsObjectAccessible and not self:IsObjectAccessible(object) then return nil end
-
-    local fn = self:SafeGet(object, method)
-    if type(fn) ~= "function" then return nil end
-    return self:SafeCall(method, fn, object, ...)
+    if not self:CanAccessValue(object) or object == nil then return nil end
+    if not self:IsObjectAccessible(object) then return nil end
+    return self:SafeCall(method, self:SafeGet(object, method), object, ...)
 end
