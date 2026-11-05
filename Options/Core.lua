@@ -6,6 +6,7 @@ local Options = addon.Options
 
 Options.addonName = addonName
 Options.categories = Options.categories or {}
+Options.settingNames = Options.settingNames or {}
 Options.EMPTY = Options.EMPTY or {}
 
 local function HumanizeKey(value)
@@ -80,7 +81,6 @@ local function NeedsVisibleRefresh(keystring)
     if keystring == "general.alwaysShowIdInfo" then return true end
     for _, prefix in ipairs({
         "item.",
-        "modules.",
         "quest.",
         "spell.",
         "unit.",
@@ -159,8 +159,7 @@ function Options:SetVariable(keystring, value, target)
     local moduleName = keystring:match("^modules%.(.+)$")
     local changed = true
     if moduleName then
-        if value == true then changed = addon:EnableModule(moduleName)
-        else changed = addon:DisableModule(moduleName) end
+        changed = addon:SetModuleEnabled(moduleName, value == true, "settings")
         value = addon.MM:IsEnabled(moduleName)
         self:SetNestedValue(target, keystring, value)
     end
@@ -171,12 +170,43 @@ function Options:SetVariable(keystring, value, target)
     return changed
 end
 
-function Options:MakeSettingName(keystring, suffix)
+local function BuildSettingName(keystring, suffix)
     local name = "ROTH_TOOLTIP_" .. tostring(keystring or "UNKNOWN"):gsub("[^%w]+", "_"):upper()
     if suffix and suffix ~= "" then
         name = name .. "_" .. tostring(suffix):gsub("[^%w]+", "_"):upper()
     end
     return name
+end
+
+function Options:MakeSettingName(keystring, suffix)
+    local name = BuildSettingName(keystring, suffix)
+    self.settingNames[name] = true
+    return name
+end
+
+function Options:NotifySetting(keystring, suffix)
+    local name = BuildSettingName(keystring, suffix)
+    if self.settingNames[name] ~= true or not Settings or type(Settings.NotifyUpdate) ~= "function" then
+        return false
+    end
+    local ok, err = pcall(Settings.NotifyUpdate, name)
+    if not ok and addon.DoctorLog then addon:DoctorLog("settings", name, err) end
+    return ok
+end
+
+function Options:NotifyAllSettings()
+    if not Settings or type(Settings.NotifyUpdate) ~= "function" then return 0 end
+    local names = {}
+    for name in pairs(self.settingNames) do names[#names + 1] = name end
+    table.sort(names)
+
+    local notified = 0
+    for _, name in ipairs(names) do
+        local ok, err = pcall(Settings.NotifyUpdate, name)
+        if ok then notified = notified + 1
+        elseif addon.DoctorLog then addon:DoctorLog("settings", name, err) end
+    end
+    return notified
 end
 
 function Options:Humanize(value)

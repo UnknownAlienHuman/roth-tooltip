@@ -142,6 +142,12 @@ local function FullSetup(account, character, locale)
     C_PaperDollInfo = { GetInspectItemLevel = function() return state.ilvl end }
     C_PlayerInfo, C_ChallengeMode = {}, {}
     GetNumSavedInstances = function() return 0 end
+    GetDifficultyInfo = function(difficultyID)
+        if difficultyID == 16 then return "Mythic", "raid", false, false, false, true, nil, false end
+        if difficultyID == 15 then return "Heroic", "raid", true, false, true, false, nil, false end
+        if difficultyID == 17 then return "Raid Finder", "raid", false, false, false, false, nil, true end
+        return "Normal", "raid", false, false, false, false, nil, false
+    end
     C_Item = {
         GetItemInfoInstant = function(value) return tonumber(tostring(value):match("item:(%d+)")) or tonumber(value), nil, nil, nil, 123 end,
         GetItemInfo = function() return "Item", "item:42", 2, 1, 1, nil, nil, 20, nil, 123, nil, nil, nil, nil, state.itemExpansionID or 10 end,
@@ -165,7 +171,7 @@ local function FullSetup(account, character, locale)
     TooltipDataProcessor = { AllTypes = "ALL",
         AddTooltipPreCall = function(kind, fn) assert(kind == "ALL"); pre[#pre + 1] = fn end,
         AddTooltipPostCall = function(kind, fn) assert(kind == "ALL"); post[#post + 1] = fn end }
-    local categories, settings = test.MockSettings()
+    local categories, settings, settingNotifications = test.MockSettings()
     local addon, loaded = {}, {}
     RothTooltipDB, RothTooltipCharacterDB = nil, nil
     local function LoadPath(path)
@@ -185,8 +191,8 @@ local function FullSetup(account, character, locale)
     assert(loaded["locales/enUS.lua"] and loaded["Options.lua"])
     RothTooltipDB, RothTooltipCharacterDB = account, character
     addon.LibEvent:event("ADDON_LOADED", "RothTooltip")
-    state.addon, state.pre, state.post, state.hooks, state.categories, state.settings =
-        addon, pre, post, hooks, categories, settings
+    state.addon, state.pre, state.post, state.hooks, state.categories, state.settings,
+        state.settingNotifications = addon, pre, post, hooks, categories, settings, settingNotifications
     function state:Display(data, getter)
         GameTooltip:SetMockData(data, getter)
         for _, fn in ipairs(pre) do if fn(GameTooltip, data) then return false end end
@@ -783,6 +789,67 @@ Check("module changes rebuild visible exact-source tooltips after lifecycle comm
     assert(calls == 1 and not s.addon.MM:IsEnabled("Spell"))
     assert(s.addon.Options:SetVariable("modules.Spell", true))
     assert(calls == 2 and s.addon.MM:IsEnabled("Spell"))
+    s:NoErrors()
+end)
+Check("profile replacement notifies registered Settings proxies", function()
+    local s = FullSetup()
+    local variable = "ROTH_TOOLTIP_GENERAL_SCALE"
+    assert((s.settingNotifications[variable] or 0) == 0)
+    assert(s.addon:ImportProfile({ general = { scale = 1.75 } }))
+    assert(s.settingNotifications[variable] == 1)
+    assert(s.settings[variable].notifiedValue == 1.75)
+    s:NoErrors()
+end)
+Check("slash module changes refresh tooltips and notify Settings", function()
+    local s = FullSetup(); local calls = 0
+    local variable = "ROTH_TOOLTIP_MODULES_SPELL"
+    GameTooltip.SetSpellByID = function(_, spellID)
+        assert(spellID == 123)
+        calls = calls + 1
+        return true
+    end
+    GameTooltip:SetMockData({ type = 1, id = 123 }, "GetSpellByID")
+    local messages, originalPrint = {}, print
+    print = function(message) messages[#messages + 1] = message end
+    local ok, err = pcall(function()
+        SlashCmdList.ROTHTOOLTIPDOCTOR("disable Spell")
+        SlashCmdList.ROTHTOOLTIPDOCTOR("enable Spell")
+    end)
+    print = originalPrint
+    assert(ok, err)
+    assert(calls == 2 and s.addon.MM:IsEnabled("Spell"))
+    assert(s.settingNotifications[variable] == 2)
+    assert(s.settings[variable].notifiedValue == true)
+    assert(messages[1] == "RothTooltip: Spell disabled")
+    assert(messages[2] == "RothTooltip: Spell enabled")
+    s:NoErrors()
+end)
+Check("raid progress ranks difficulty semantics instead of numeric IDs", function()
+    local s = FullSetup(); s.guid = "Player-1-1"
+    s.addon.db.unit.player.showRaidProgress = true
+    GetNumSavedInstances = function() return 2 end
+    GetSavedInstanceInfo = function(index)
+        if index == 1 then return "Current Raid", nil, nil, 16, true, nil, nil, true, nil, "Mythic", 8, 1 end
+        return "Current Raid", nil, nil, 17, true, nil, nil, true, nil, "Raid Finder", 8, 8
+    end
+    s:Display(s:UnitData())
+    local line = assert(s.addon:FindLine(GameTooltip, "^Current Raid:"))
+    assert(line.text:find("1/8 Mythic", 1, true))
+    assert(not line.text:find("Raid Finder", 1, true))
+    s:NoErrors()
+end)
+Check("cursor anchor resolves geometry before claiming ANCHOR_NONE", function()
+    local s = FullSetup(); local anchor = s.addon.db.general.anchor
+    anchor.position, anchor.p, anchor.x, anchor.y = "cursor", "TOPRIGHT", 11, 22
+    GameTooltip.owner = UIParent
+    GameTooltip.points = { "BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 0, 0 }
+    local timerCount = #s.timers
+    GetCursorPosition = function() return nil, nil end
+    s.addon.LibEvent:trigger("tooltip:anchor", GameTooltip, UIParent)
+    assert(GameTooltip.anchor ~= "ANCHOR_NONE")
+    assert(GameTooltip.points[1] == "TOPRIGHT" and GameTooltip.points[2] == UIParent)
+    assert(GameTooltip.points[4] == 11 and GameTooltip.points[5] == 22)
+    assert(#s.timers == timerCount)
     s:NoErrors()
 end)
 print(string.format("PASS: %d tests (%s), including complete TOC Lua bootstrap; native client NOT-RUN", test.Count(), _VERSION))

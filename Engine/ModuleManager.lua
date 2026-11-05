@@ -336,8 +336,40 @@ function MM:ExportText()
     return table.concat(out, "\n")
 end
 
-function addon:EnableModule(name) return MM:Enable(name) end
-function addon:DisableModule(name) return MM:Disable(name) end
-function addon:ToggleModule(name) return MM:Toggle(name) end
+local function FinishModuleChange(name, wasEnabled, origin)
+    local isEnabled = MM:IsEnabled(name)
+    if wasEnabled == isEnabled then return end
+
+    if type(addon.RefreshManagedTooltipsMatching) == "function" then
+        addon:RefreshManagedTooltipsMatching(nil, "module:" .. tostring(name))
+    end
+    if origin ~= "settings" then
+        local options = addon.Options
+        if type(options) == "table" and type(options.NotifySetting) == "function" then
+            options:NotifySetting("modules." .. tostring(name))
+        end
+    end
+end
+
+function addon:SetModuleEnabled(name, enabled, origin)
+    local wasEnabled = MM:IsEnabled(name)
+    local ok
+    if enabled == true then ok = MM:Enable(name)
+    else ok = MM:Disable(name) end
+    FinishModuleChange(name, wasEnabled, origin)
+    return ok
+end
+
+function addon:EnableModule(name, origin)
+    return self:SetModuleEnabled(name, true, origin)
+end
+
+function addon:DisableModule(name, origin)
+    return self:SetModuleEnabled(name, false, origin)
+end
+
+function addon:ToggleModule(name, origin)
+    return self:SetModuleEnabled(name, not MM:IsEnabled(name), origin)
+end
 
 bus:attachTrigger("tooltip:variables:loaded", function() MM:ApplySaved() end)

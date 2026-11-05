@@ -50,9 +50,9 @@ local function ResolveCursorPoint(mode, point, offsetX, offsetY)
     return point, floor(cursorX + offsetX), floor(cursorY + offsetY)
 end
 
-local function UpdateCursorAnchor(tooltip, state)
+local function UpdateCursorAnchor(tooltip, state, point, x, y)
     if states[tooltip] ~= state or not addon:IsTooltipSafe(tooltip) then return false end
-    local point, x, y = ResolveCursorPoint(state.mode, state.point, state.offsetX, state.offsetY)
+    if not point then point, x, y = ResolveCursorPoint(state.mode, state.point, state.offsetX, state.offsetY) end
     if not point then return false end
     if state.currentPoint == point and state.x == x and state.y == y then return true end
     state.currentPoint, state.x, state.y = point, x, y
@@ -61,14 +61,23 @@ local function UpdateCursorAnchor(tooltip, state)
     return true
 end
 
-local function StartCursorAnchor(tooltip, mode, point, offsetX, offsetY)
+local function StartCursorAnchor(tooltip, parent, mode, point, offsetX, offsetY)
     StopCursorAnchor(tooltip)
-    if not addon:IsTooltipSafe(tooltip) then return end
+    if not addon:IsTooltipSafe(tooltip) or not addon:IsObjectAccessible(parent) then return false end
+
+    -- Resolve ordinary cursor geometry before claiming ANCHOR_NONE. A denied or
+    -- unavailable cursor path must leave enough native state for the static
+    -- fallback instead of marooning the tooltip without an anchor owner.
+    local resolvedPoint, x, y = ResolveCursorPoint(mode, point, offsetX, offsetY)
+    if not resolvedPoint then return false end
+
+    local setOwner = addon:SafeGet(tooltip, "SetOwner")
+    if type(setOwner) ~= "function" or not pcall(setOwner, tooltip, parent, "ANCHOR_NONE") then return false end
 
     local state = { mode = mode, point = point, offsetX = offsetX, offsetY = offsetY }
     states[tooltip] = state
-    if not UpdateCursorAnchor(tooltip, state) then states[tooltip] = nil; return end
-    if not C_Timer or type(C_Timer.NewTicker) ~= "function" then return end
+    if not UpdateCursorAnchor(tooltip, state, resolvedPoint, x, y) then states[tooltip] = nil; return false end
+    if not C_Timer or type(C_Timer.NewTicker) ~= "function" then return true end
 
     state.ticker = C_Timer.NewTicker(CURSOR_INTERVAL, function()
         if states[tooltip] ~= state then return end
@@ -79,6 +88,7 @@ local function StartCursorAnchor(tooltip, mode, point, offsetX, offsetY)
             StopCursorAnchor(tooltip)
         end
     end)
+    return true
 end
 
 local function AnchorDefault(tooltip, parent, anchor, finalPass)
@@ -114,11 +124,13 @@ local function ApplyAnchor(tooltip, parent, anchor, isUnitFrame, finalPass)
     if position == "cursorRight" then
         LibEvent:trigger("tooltip.anchor.cursor.right", tooltip, parent, anchor.cx, anchor.cy)
     elseif position == "cursor" then
-        addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_NONE")
-        StartCursorAnchor(tooltip, "cursor", anchor.cp, anchor.cx, anchor.cy)
+        if not StartCursorAnchor(tooltip, parent, "cursor", anchor.cp, anchor.cx, anchor.cy) then
+            AnchorDefault(tooltip, parent, anchor, finalPass)
+        end
     elseif position == "auto" then
-        addon:SafeMethod(tooltip, "SetOwner", parent, "ANCHOR_NONE")
-        StartCursorAnchor(tooltip, "auto", nil, anchor.cx, anchor.cy)
+        if not StartCursorAnchor(tooltip, parent, "auto", nil, anchor.cx, anchor.cy) then
+            AnchorDefault(tooltip, parent, anchor, finalPass)
+        end
     elseif position == "inherit" and not finalPass then
         local general = addon.db and addon.db.general
         ApplyAnchor(tooltip, parent, general and general.anchor, isUnitFrame, true)

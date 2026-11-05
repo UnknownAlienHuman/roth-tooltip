@@ -282,6 +282,7 @@ def validate_runtime_invariants() -> None:
     diy_raw, _ = read_lua("Options/DIY.lua")
     spell_raw, spell = read_lua("Spell.lua")
     skin_frames_raw, _ = read_lua("SkinFrames.lua")
+    anchor_raw, _ = read_lua("Anchor.lua")
     config_raw = (ROOT / "Config.lua").read_text(encoding="utf-8")
 
     if "canaccessvalue" not in safe_raw or "canaccessallvalues" not in safe_raw:
@@ -332,8 +333,16 @@ def validate_runtime_invariants() -> None:
         fail("profile validation inspects table metadata before the access gate")
     if "CopyLayoutRows" not in diy_raw or "NormalizeProfile" not in diy_raw or "__RT_ProfileGeneration" not in diy_raw:
         fail("DIY layout edits are not detached, validated and generation-gated")
-    if '"modules."' not in options_core_raw:
-        fail("module toggles do not refresh visible exact-source tooltips")
+    if "function addon:SetModuleEnabled" not in manager_raw or "RefreshManagedTooltipsMatching" not in manager_raw:
+        fail("module transitions do not own visible exact-source refresh")
+    if "NotifyAllSettings" not in options_core_raw or "Settings.NotifyUpdate" not in options_core_raw:
+        fail("profile replacement does not notify registered Settings proxies")
+    if "RaidDifficultyRank" not in unit_stats_raw or "GetDifficultyInfo" not in unit_stats_raw:
+        fail("raid progress still infers difficulty order from numeric IDs")
+    cursor_resolve = anchor_raw.find("ResolveCursorPoint(mode, point, offsetX, offsetY)")
+    cursor_owner = anchor_raw.find('pcall(setOwner, tooltip, parent, "ANCHOR_NONE")')
+    if cursor_resolve < 0 or cursor_owner < 0 or cursor_resolve > cursor_owner:
+        fail("cursor anchoring claims ANCHOR_NONE before geometry is available")
     for source, label in ((config_raw, "Config.lua"), (options_raw, "Options.lua")):
         if "npcTitle" in source:
             fail(f"dead npcTitle setting remains in {label}")

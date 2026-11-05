@@ -628,7 +628,8 @@ function Options:TryInitialize()
 end
 
 LibEvent:attachTrigger("tooltip:variables:loaded", function()
-    Options:TryInitialize()
+    local wasInitialized = Options.initialized == true
+    if Options:TryInitialize() and wasInitialized then Options:NotifyAllSettings() end
 end)
 
 LibEvent:attachEvent("PLAYER_LOGIN, ADDON_LOADED", function()

@@ -621,10 +621,13 @@ Check("Settings cannot disable the core module", function()
     assert(addon.db.modules.General == true and manager:IsEnabled("General"))
 end)
 Check("slash commands report actual outcomes", function()
-    local _, manager, bus = LoadUI()
+    local addon, manager, bus = LoadUI()
+    local refreshes = 0
+    addon.RefreshManagedTooltipsMatching = function() refreshes = refreshes + 1 end
     bus:trigger("tooltip:variables:loaded")
     manager:RegisterModule("General", {})
     manager:RegisterModule("Broken", { Enable = function() return false end })
+    addon.db.modules.Working = false
     manager:RegisterModule("Working", {})
     local messages, originalPrint = {}, print
     print = function(message) messages[#messages + 1] = message end
@@ -638,6 +641,7 @@ Check("slash commands report actual outcomes", function()
     for index = 1, 3 do assert(messages[index]:find("failed", 1, true)) end
     assert(messages[4] == "RothTooltip: Working enabled")
     assert(messages[5] == "RothTooltip: Working disabled")
+    assert(refreshes == 2)
 end)
 Check("managed tooltip trigger forwarding retains nil positions", function()
     local addon, _, bus = LoadUI()
@@ -649,7 +653,7 @@ Check("managed tooltip trigger forwarding retains nil positions", function()
 end)
 
 local function MockSettings()
-    local categories, values = {}, {}
+    local categories, values, notifications = {}, {}, {}
     local function Category(name)
         local category = { name = name }
         function category:GetID() return self.name end
@@ -683,8 +687,14 @@ local function MockSettings()
             }
         end,
         RegisterAddOnCategory = function() end,
+        NotifyUpdate = function(name)
+            local setting = values[name]
+            if not setting then return end
+            notifications[name] = (notifications[name] or 0) + 1
+            setting.notifiedValue = setting.get()
+        end,
     }
-    return categories, values
+    return categories, values, notifications
 end
 Check("Settings initializes every category without external libraries", function()
     local addon = LoadUI()

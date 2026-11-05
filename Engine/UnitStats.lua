@@ -167,12 +167,22 @@ end
 local raidProgressCache
 local raidProgressCacheTime = 0
 
-local function PreferRaidEntry(previous, difficultyID, encounterProgress)
+local function RaidDifficultyRank(difficultyID)
+    if type(difficultyID) ~= "number" then return 0 end
+    local _, instanceType, isHeroic, _, displayHeroic, displayMythic, _, isLFR =
+        Call(GetDifficultyInfo, difficultyID)
+
+    if displayMythic == true then return 4 end
+    if isHeroic == true or displayHeroic == true then return 3 end
+    if isLFR == true then return 1 end
+    if instanceType == nil or instanceType == "raid" then return 2 end
+    return 0
+end
+
+local function PreferRaidEntry(previous, difficultyRank, encounterProgress)
     if not previous then return true end
-    if type(difficultyID) == "number" and type(previous.difficultyID) == "number"
-        and difficultyID ~= previous.difficultyID then
-        return difficultyID > previous.difficultyID
-    end
+    local previousRank = tonumber(previous.difficultyRank) or 0
+    if difficultyRank ~= previousRank then return difficultyRank > previousRank end
     return encounterProgress > previous.encounterProgress
 end
 
@@ -199,11 +209,13 @@ local function GetSavedRaidProgress()
 
         if type(name) == "string" and name ~= "" and locked == true and isRaid == true
             and type(numEncounters) == "number" and type(encounterProgress) == "number" then
+            local difficultyRank = RaidDifficultyRank(difficultyID)
             local previous = byName[name]
-            if PreferRaidEntry(previous, difficultyID, encounterProgress) then
+            if PreferRaidEntry(previous, difficultyRank, encounterProgress) then
                 byName[name] = {
                     raidName = name,
                     difficultyID = type(difficultyID) == "number" and difficultyID or nil,
+                    difficultyRank = difficultyRank,
                     difficultyName = type(difficultyName) == "string" and difficultyName or nil,
                     numEncounters = numEncounters,
                     encounterProgress = encounterProgress,

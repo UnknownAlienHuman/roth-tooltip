@@ -32,6 +32,14 @@
 - Scope-check live source `12.1.5.70783` against the KB-selected `12.1.5.70688`; its changed files do not alter the contracts used by RothTooltip.
 - Add nine focused regressions; the complete suite now contains 130 tests before the final Lua 5.1 CI run.
 
+## Fifth-pass hardening — 2026-11-04
+
+- Notify every registered proxy setting after an external profile/scope replacement so an open Settings panel cannot retain values from the previous backing table.
+- Give public module transitions one side-effect owner: lifecycle commit, exact-source visible-tooltip refresh and external Settings notification. Settings-originated writes suppress the duplicate notification.
+- Rank saved raid lockouts with the public `GetDifficultyInfo` semantics instead of treating numeric difficulty IDs as an ordered scale.
+- Resolve cursor geometry before claiming `ANCHOR_NONE`; unavailable cursor coordinates now fall back to the configured static anchor instead of leaving a tooltip ownerless.
+- Add four focused integration regressions and strengthen repository invariants; the complete suite now contains 134 tests before the final Lua 5.1 CI run.
+
 ## Development audit — 2026-11-03
 
 - Fresh, gated tooltip contexts; exact-source refresh and one modifier owner. Native item readiness and bag/action/comparison acquisition remain native.
